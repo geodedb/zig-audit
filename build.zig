@@ -7,12 +7,20 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // External dependency: DNS library for hostname resolution
+    const dns_dep = b.dependency("dns", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const dns_mod = dns_dep.module("dns");
+
     // Main library module
     const module = b.addModule("audit", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
+    module.addImport("dns", dns_mod);
 
     // Unit tests (run tests defined in the module itself)
     const test_step = b.step("test", "Run unit tests");
@@ -21,6 +29,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "dns", .module = dns_mod },
+            },
         }),
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
@@ -41,6 +52,56 @@ pub fn build(b: *std.Build) void {
     const run_integration_tests = b.addRunArtifact(integration_tests);
     integration_step.dependOn(&run_integration_tests.step);
 
+    // CEF tests
+    const cef_test_step = b.step("test-cef", "Run CEF formatting tests");
+    const cef_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_cef.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "audit", .module = module },
+            },
+        }),
+    });
+    cef_test_step.dependOn(&b.addRunArtifact(cef_tests).step);
+
+    // Filter tests
+    const filter_test_step = b.step("test-filters", "Run filter and redaction tests");
+    const filter_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_filters.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "audit", .module = module },
+            },
+        }),
+    });
+    filter_test_step.dependOn(&b.addRunArtifact(filter_tests).step);
+
+    // Transport tests
+    const transport_test_step = b.step("test-transports", "Run transport tests");
+    const transport_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/test_transports.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "audit", .module = module },
+            },
+        }),
+    });
+    transport_test_step.dependOn(&b.addRunArtifact(transport_tests).step);
+
+    // Run all tests
+    const all_test_step = b.step("test-all", "Run all tests");
+    all_test_step.dependOn(&run_unit_tests.step);
+    all_test_step.dependOn(&run_integration_tests.step);
+    all_test_step.dependOn(&b.addRunArtifact(cef_tests).step);
+    all_test_step.dependOn(&b.addRunArtifact(filter_tests).step);
+    all_test_step.dependOn(&b.addRunArtifact(transport_tests).step);
+
     // Check step for IDE integration (fast syntax validation)
     const check_step = b.step("check", "Check for compilation errors");
     const check = b.addTest(.{
@@ -48,6 +109,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/root.zig"),
             .target = target,
             .optimize = optimize,
+            .imports = &.{
+                .{ .name = "dns", .module = dns_mod },
+            },
         }),
     });
     check_step.dependOn(&check.step);

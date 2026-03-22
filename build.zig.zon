@@ -3,7 +3,12 @@
     .version = "0.1.0",
     .fingerprint = 0x9218ff7908edd427,
     .minimum_zig_version = "0.15.1",
-    .dependencies = .{},
+    .dependencies = .{
+        .dns = .{
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#976fedf07befad3724fa66092677b9e5242a58fc",
+            .hash = "dns-0.1.0-x4U-zalRDABmEIaJxV8eY7UqOlpvJRJIbtIQ-CSgCzVL",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

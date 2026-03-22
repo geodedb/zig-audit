@@ -19,6 +19,7 @@ Thumbs.db
 *.out
 test_*
 !tests/
+!tests/test_*
 
 # Build artifacts
 *.exe

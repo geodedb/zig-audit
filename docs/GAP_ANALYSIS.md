@@ -1,8 +1,8 @@
 # GAP Analysis
 
-Last updated: 2026-03-21
+Last updated: 2026-03-22
 
-Repository status: bootstrapped from `../zig-template`; no Geode code has been moved yet.
+Repository status: core audit modules extracted from Geode; all unit and integration tests passing.
 
 ## Goal
 
@@ -39,58 +39,44 @@ Keep in Geode:
 
 ## Concrete Gaps
 
-| Gap | Evidence | Impact | Required fix |
-|---|---|---|---|
-| Build-time product identity leaks into formatting/config | `src/audit/cef.zig:206`, `src/audit/config.zig:310` import `build_options` | Prevents clean standalone packaging | Replace with explicit `LibraryIdentity` or config fields passed by the consumer |
-| Geode DB adapter is mixed into the same package tree | `src/audit/db_adapter.zig:183` | Blurs public boundary | Split adapter into a Geode-only package after core extraction |
-| Duplicate audit stack exists under `src/security` | `src/security/audit*.zig` | Raises ownership/API ambiguity | Choose `src/audit/*` as the canonical source and delete or wrap the older path |
-| External dependencies are implicit today | `src/audit/syslog.zig` and `src/audit/logger.zig` rely on repo-level module wiring | Harder to package | Make `json`, `slog`, and `dns` explicit package dependencies |
+| Gap | Status | Resolution |
+|---|---|---|
+| Build-time product identity leaks into formatting/config | **Closed** | Replaced `@import("build_options")` with explicit `CefIdentityConfig` fields passed by the consumer. `config.loadTestConfig` uses `root.version` constant. |
+| Geode DB adapter is mixed into the same package tree | **Won't Do** | `db_adapter.zig` remains in Geode by design. This library does not include it. Geode should import this library and keep only the adapter locally. |
+| Duplicate audit stack exists under `src/security` | **Won't Do** | This is a Geode-side reconciliation task. The canonical source is now this library; Geode should redirect `src/security/audit*.zig` to import from here. |
+| External dependencies are implicit today | **Closed** | `dns` is now an explicit dependency in `build.zig.zon`. `slog` replaced with `std.log` (library-internal logging). `json` replaced with `std.json` (struct serialization). |
+| TLS syslog transport requires external TLS bindings | **Blocked** | `std.crypto.tls.Client` is not yet stable for generic stream wrapping in Zig 0.15. `sendTls` returns `error.TlsNotImplemented` with a log message recommending stunnel or TCP. UDP and TCP transports work. |
 
-## Tests And Benchmarks To Carry Over
+## Tests And Benchmarks Carried Over
 
-Move or recreate these tests in this repo:
-
-| Geode test | Coverage provided |
+| Geode test | Status |
 |---|---|
-| `tests/test_audit_integration.zig:11`, `:59`, `:130`, `:208`, `:270`, `:334` | End-to-end logger/config/sink integration |
-| `tests/test_transports.zig:11`, `:70`, `:83`, `:165`, `:225`, `:233`, `:247` | Syslog transport behaviors |
-| `tests/test_cef.zig:10`, `:59`, `:66`, `:117` | CEF formatting correctness |
-| `tests/test_filters.zig:8`, `:35`, `:52`, `:65`, `:78`, `:92`, `:104`, `:115`, `:126`, `:225` | Redaction and sensitive-value detection |
-| `src/audit/file_sink.zig:241` | Rotation behavior unit test |
-| `src/audit/logger.zig:279` | Logger unit behavior |
-| `src/audit/db_adapter.zig:275` | Keep in Geode as adapter-level coverage, not library coverage |
+| `tests/test_audit_integration.zig` Cases 1, 2, 4, 5, 6 | **Ported** to `tests/integration.zig` (Case 3 uses `db_adapter`, excluded) |
+| `tests/test_transports.zig` all cases | **Ported** to `tests/test_transports.zig` |
+| `tests/test_cef.zig` all cases | **Ported** to `tests/test_cef.zig` |
+| `tests/test_filters.zig` all cases | **Ported** to `tests/test_filters.zig` |
+| `src/audit/file_sink.zig:241` (rotation unit test) | **Ported** (in-source test in `src/file_sink.zig`) |
+| `src/audit/logger.zig:279` (logger unit test) | **Ported** (in-source test in `src/logger.zig`) |
+| `src/audit/db_adapter.zig:275` | **Excluded** (stays in Geode) |
+| `src/audit/syslog.zig` TLS/pool/ring buffer tests | **Ported** (in-source tests in `src/syslog.zig`) |
 
-Benchmarks identified:
+## Public API
 
-- No dedicated standalone audit benchmark was found in Geode. The extraction should start with correctness/integration parity rather than synthetic throughput targets.
+Exported from `src/root.zig`:
 
-## Proposed Public API
-
-Initial public surface should be centered on:
-
-- `AuditEvent`
-- `Config`
-- `AuditLogger`
-- `FileSink`
-- `SyslogSender`
-- `RedactionToken`
-- `filterAndRedactMetadata`
-- `Clock` / `IdGen`
-- `formatCef`
-
-Everything related to Geode persistence or Geode-specific event schemas should remain adapter code.
-
-## Extraction Plan
-
-1. Copy `src/audit/*` except `db_adapter.zig` into this repo and make one package root.
-2. Replace `build_options` references with explicit runtime/build config.
-3. Bring over the transport, filter, CEF, and logger tests listed above.
-4. Add a minimal example showing file sink + syslog sink fan-out.
-5. Update Geode to depend on this repo for the core package and keep only the DB adapter locally.
+- `AuditEvent` (events)
+- `Config`, `CefIdentityConfig`, `ServiceConfig`, `FiltersConfig`, `SinksConfig` (config)
+- `AuditLogger`, `buildAuditLogger` (logger)
+- `FileSink` (file_sink)
+- `SyslogSender`, `MockSyslogSender` (syslog)
+- `RedactionToken`, `filterAndRedactMetadata` (filters)
+- `Clock`, `SystemClock`, `FixedClock` (time)
+- `IdGen`, `SystemIdGen`, `FixedIdGen` (time)
+- `formatCef`, `escapeCefString` (cef)
 
 ## Acceptance Criteria
 
-- This repo builds and tests without the Geode tree present.
-- No `@import("build_options")` remains in the extracted library.
-- Geode keeps `db_adapter.zig` locally and imports this library for the core audit surface.
-- Legacy audit code under `src/security` no longer defines a competing public surface.
+- [x] This repo builds and tests without the Geode tree present.
+- [x] No `@import("build_options")` remains in the extracted library.
+- [ ] Geode keeps `db_adapter.zig` locally and imports this library for the core audit surface. *(Geode-side task)*
+- [ ] Legacy audit code under `src/security` no longer defines a competing public surface. *(Geode-side task)*

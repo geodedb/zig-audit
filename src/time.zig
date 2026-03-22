@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright (c) 2024-2025 CodePros
+
+const std = @import("std");
+
+pub const Clock = struct {
+    context: *anyopaque,
+    vtable: *const VTable,
+
+    const VTable = struct {
+        nowMs: *const fn (context: *anyopaque) i128,
+        nowRfc3339: *const fn (context: *anyopaque, buf: []u8) []const u8,
+    };
+
+    pub fn nowMs(self: Clock) i128 {
+        return self.vtable.nowMs(self.context);
+    }
+
+    pub fn nowRfc3339(self: Clock, buf: []u8) []const u8 {
+        return self.vtable.nowRfc3339(self.context, buf);
+    }
+};
+
+pub const SystemClock = struct {
+    const vtable = Clock.VTable{
+        .nowMs = nowMsImpl,
+        .nowRfc3339 = nowRfc3339Impl,
+    };
+
+    pub fn clock(self: *SystemClock) Clock {
+        return Clock{ .context = @ptrCast(self), .vtable = &vtable };
+    }
+
+    fn nowMsImpl(_: *anyopaque) i128 {
+        return std.time.milliTimestamp();
+    }
+
+    fn nowRfc3339Impl(_: *anyopaque, buf: []u8) []const u8 {
+        const ts = std.time.milliTimestamp();
+        const seconds = @divTrunc(ts, 1000);
+        const millis = @mod(ts, 1000);
+        const millis_u32: u32 = @intCast(@as(i64, @intCast(millis)));
+
+        const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
+        const day_seconds = epoch_seconds.getDaySeconds();
+        const year_day = epoch_seconds.getEpochDay().calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
+
+        return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
+            year_day.year,
+            @intFromEnum(month_day.month),
+            month_day.day_index + 1,
+            day_seconds.getHoursIntoDay(),
+            day_seconds.getMinutesIntoHour(),
+            day_seconds.getSecondsIntoMinute(),
+            millis_u32,
+        }) catch "";
+    }
+};
+
+pub const FixedClock = struct {
+    fixed_time_ms: i128,
+
+    const vtable = Clock.VTable{
+        .nowMs = nowMsImpl,
+        .nowRfc3339 = nowRfc3339Impl,
+    };
+
+    pub fn init(time_ms: i128) FixedClock {
+        return FixedClock{ .fixed_time_ms = time_ms };
+    }
+
+    pub fn clock(self: *FixedClock) Clock {
+        return Clock{ .context = @ptrCast(self), .vtable = &vtable };
+    }
+
+    fn nowMsImpl(context: *anyopaque) i128 {
+        const self: *FixedClock = @ptrCast(@alignCast(context));
+        return self.fixed_time_ms;
+    }
+
+    fn nowRfc3339Impl(context: *anyopaque, buf: []u8) []const u8 {
+        const self: *FixedClock = @ptrCast(@alignCast(context));
+        const ts = self.fixed_time_ms;
+        const seconds = @divTrunc(ts, 1000);
+        const millis = @mod(ts, 1000);
+        const millis_u32: u32 = @intCast(@as(i64, @intCast(millis)));
+
+        const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
+        const day_seconds = epoch_seconds.getDaySeconds();
+        const year_day = epoch_seconds.getEpochDay().calculateYearDay();
+        const month_day = year_day.calculateMonthDay();
+
+        return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
+            year_day.year,
+            @intFromEnum(month_day.month),
+            month_day.day_index + 1,
+            day_seconds.getHoursIntoDay(),
+            day_seconds.getMinutesIntoHour(),
+            day_seconds.getSecondsIntoMinute(),
+            millis_u32,
+        }) catch "";
+    }
+};
+
+pub const IdGen = struct {
+    vtable: *const VTable,
+
+    const VTable = struct {
+        traceId: *const fn (ptr: *anyopaque, buf: *[32]u8) void,
+        spanId: *const fn (ptr: *anyopaque, buf: *[16]u8) void,
+        requestId: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator) []const u8,
+    };
+
+    pub fn traceId(self: IdGen, buf: *[32]u8) void {
+        return self.vtable.traceId(@constCast(@ptrCast(self.vtable)), buf);
+    }
+
+    pub fn spanId(self: IdGen, buf: *[16]u8) void {
+        return self.vtable.spanId(@constCast(@ptrCast(self.vtable)), buf);
+    }
+
+    pub fn requestId(self: IdGen, allocator: std.mem.Allocator) []const u8 {
+        return self.vtable.requestId(@constCast(@ptrCast(self.vtable)), allocator);
+    }
+};
+
+pub const SystemIdGen = struct {
+    rng: std.Random.DefaultPrng,
+    vtable: IdGen.VTable = IdGen.VTable{
+        .traceId = traceIdImpl,
+        .spanId = spanIdImpl,
+        .requestId = requestIdImpl,
+    },
+
+    pub fn init() SystemIdGen {
+        return SystemIdGen{
+            .rng = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp())),
+        };
+    }
+
+    pub fn idGen(self: *SystemIdGen) IdGen {
+        return IdGen{ .vtable = &self.vtable };
+    }
+
+    fn traceIdImpl(ptr: *anyopaque, buf: *[32]u8) void {
+        const self: *SystemIdGen = @ptrCast(@alignCast(ptr));
+        var bytes: [16]u8 = undefined;
+        self.rng.random().bytes(&bytes);
+        buf.* = std.fmt.bytesToHex(bytes, .lower);
+    }
+
+    fn spanIdImpl(ptr: *anyopaque, buf: *[16]u8) void {
+        const self: *SystemIdGen = @ptrCast(@alignCast(ptr));
+        var bytes: [8]u8 = undefined;
+        self.rng.random().bytes(&bytes);
+        buf.* = std.fmt.bytesToHex(bytes, .lower);
+    }
+
+    fn requestIdImpl(ptr: *anyopaque, allocator: std.mem.Allocator) []const u8 {
+        const self: *SystemIdGen = @ptrCast(@alignCast(ptr));
+        const id = self.rng.random().int(u64);
+        return std.fmt.allocPrint(allocator, "req-{x}", .{id}) catch "";
+    }
+};
+
+pub const FixedIdGen = struct {
+    trace_id: [32]u8,
+    span_id: [16]u8,
+    request_id: []const u8,
+    vtable: IdGen.VTable = IdGen.VTable{
+        .traceId = traceIdImpl,
+        .spanId = spanIdImpl,
+        .requestId = requestIdImpl,
+    },
+
+    pub fn init(trace_id: [32]u8, span_id: [16]u8, request_id: []const u8) FixedIdGen {
+        return FixedIdGen{
+            .trace_id = trace_id,
+            .span_id = span_id,
+            .request_id = request_id,
+        };
+    }
+
+    pub fn idGen(self: *FixedIdGen) IdGen {
+        return IdGen{ .vtable = &self.vtable };
+    }
+
+    fn traceIdImpl(ptr: *anyopaque, buf: *[32]u8) void {
+        const self: *FixedIdGen = @ptrCast(@alignCast(ptr));
+        @memcpy(buf, &self.trace_id);
+    }
+
+    fn spanIdImpl(ptr: *anyopaque, buf: *[16]u8) void {
+        const self: *FixedIdGen = @ptrCast(@alignCast(ptr));
+        @memcpy(buf, &self.span_id);
+    }
+
+    fn requestIdImpl(ptr: *anyopaque, allocator: std.mem.Allocator) []const u8 {
+        const self: *FixedIdGen = @ptrCast(@alignCast(ptr));
+        return allocator.dupe(u8, self.request_id) catch "";
+    }
+};
+
+// Test timestamp for deterministic testing: 2025-01-01T00:00:00Z
+pub const TEST_TIMESTAMP_MS: i128 = 1735689600000;
+pub const TEST_TRACE_ID = "11111111111111111111111111111111".*;
+pub const TEST_SPAN_ID = "2222222222222222".*;
+pub const TEST_REQUEST_ID = "req-abc123";
