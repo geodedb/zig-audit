@@ -12,10 +12,5 @@ paths = [
     '''\.zig-cache''',
     '''zig-out''',
     '''\.git''',
+    '''tests/test_filters\.zig''',
 ]
-
-# Add custom rules or allowlist entries as needed
-# [[rules]]
-# id = "custom-rule"
-# description = "Custom secret pattern"
-# regex = '''pattern'''
