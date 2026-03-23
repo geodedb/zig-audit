@@ -120,17 +120,18 @@ pub const AuditLogger = struct {
             event.metadata = null;
         }
 
-        // Check message size limit (8 KiB after redaction)
-        const test_json = try self.serializeEventForSizeCheck(&event);
-        defer self.allocator.free(test_json);
+        // Check message size limit (8 KiB after redaction).
+        // Estimate size without full serialization: sum known field lengths
+        // with conservative JSON overhead, and only serialize metadata if present.
+        const estimated_size = try self.estimateEventSize(&event);
 
-        if (test_json.len > 8192) {
+        if (estimated_size > 8192) {
             if (event.metadata) |metadata| {
                 json_util.freeJsonValue(self.allocator, metadata);
             }
             var truncation_obj = std.json.ObjectMap.init(self.allocator);
             try truncation_obj.put("_truncated", std.json.Value{ .bool = true });
-            try truncation_obj.put("_original_size", std.json.Value{ .integer = @intCast(test_json.len) });
+            try truncation_obj.put("_original_size", std.json.Value{ .integer = @intCast(estimated_size) });
             event.metadata = std.json.Value{ .object = truncation_obj };
         }
 
@@ -144,20 +145,47 @@ pub const AuditLogger = struct {
         }
     }
 
-    fn serializeEventForSizeCheck(self: *AuditLogger, event: *const events.AuditEvent) ![]const u8 {
-        var obj = std.json.ObjectMap.init(self.allocator);
-        defer obj.deinit();
+    /// Estimate the serialized JSON size of an audit event without building a
+    /// throwaway ObjectMap.  Fixed fields are accounted for with a conservative
+    /// overhead constant; only metadata (the unbounded part) is serialized.
+    fn estimateEventSize(self: *AuditLogger, event: *const events.AuditEvent) !usize {
+        // Base overhead covers JSON braces, commas, quotes around keys/values,
+        // colons, and the fixed-name keys (category, action, outcome, severity,
+        // actor_id, ts_unix_ms, trace_id, span_id, subject_id, request_id,
+        // session_id, source_ip).  Each key-value pair costs roughly:
+        //   "key":"value",  =>  key.len + value.len + 6 (quotes, colon, comma)
+        // We use 128 bytes as a conservative base for structural overhead.
+        var size: usize = 128;
 
-        try obj.put("category", std.json.Value{ .string = event.category });
-        try obj.put("action", std.json.Value{ .string = event.action });
-        try obj.put("actor_id", std.json.Value{ .string = event.actor_id });
+        // Required string fields
+        size += event.category.len;
+        size += event.action.len;
+        size += event.actor_id.len;
 
+        // Optional string fields -- add length + per-field overhead (16 bytes
+        // for the key name, quotes, colon, comma)
+        if (event.subject_id) |s| size += s.len + 16;
+        if (event.request_id) |r| size += r.len + 16;
+        if (event.session_id) |s| size += s.len + 16;
+        if (event.source_ip) |s| size += s.len + 16;
+
+        // Fixed-size fields
+        if (event.trace_id != null) size += 48; // 32 hex chars + key overhead
+        if (event.span_id != null) size += 32; // 16 hex chars + key overhead
+
+        // Timestamp: up to 20 digits for i128
+        size += 20;
+
+        // Metadata is the variable/unbounded part -- serialize only this
         if (event.metadata) |metadata| {
-            try obj.put("metadata", metadata);
+            const meta_json = std.json.Stringify.valueAlloc(self.allocator, metadata, .{}) catch |err| switch (err) {
+                error.OutOfMemory => return 8192 + 1, // trigger truncation on OOM
+            };
+            defer self.allocator.free(meta_json);
+            size += meta_json.len + 16; // +16 for "metadata": wrapper
         }
 
-        const value = std.json.Value{ .object = obj };
-        return std.json.Stringify.valueAlloc(self.allocator, value, .{});
+        return size;
     }
 };
 
@@ -166,6 +194,81 @@ pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: *const config.Config)
     var sys_id_gen = time.SystemIdGen.init();
 
     return AuditLogger.init(allocator, cfg.*, sys_clock.clock(), sys_id_gen.idGen());
+}
+
+test "estimateEventSize: small event stays under 8192" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_config = try config.loadTestConfig(allocator);
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+
+    const logger_inst = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+    defer logger_inst.deinit();
+
+    const event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = "subject-1",
+        .request_id = "req-123",
+        .session_id = "ses-456",
+        .source_ip = "10.0.0.1",
+        .trace_id = time.TEST_TRACE_ID,
+        .span_id = time.TEST_SPAN_ID,
+        .metadata = null,
+    };
+
+    const size = try logger_inst.estimateEventSize(&event);
+    // A small event with no metadata should be well under 8 KiB
+    try std.testing.expect(size < 1024);
+}
+
+test "estimateEventSize: large metadata exceeds 8192" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_config = try config.loadTestConfig(allocator);
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+
+    const logger_inst = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+    defer logger_inst.deinit();
+
+    // Build metadata with a large value (>8 KiB)
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    const big_value = try allocator.alloc(u8, 9000);
+    defer allocator.free(big_value);
+    @memset(big_value, 'x');
+    try metadata_obj.put("big_field", std.json.Value{ .string = big_value });
+    defer metadata_obj.deinit();
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    const event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = metadata,
+    };
+
+    const size = try logger_inst.estimateEventSize(&event);
+    // With 9000 bytes of metadata, the estimate must exceed 8192
+    try std.testing.expect(size > 8192);
 }
 
 test "audit logger basic functionality" {

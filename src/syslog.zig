@@ -54,6 +54,15 @@ pub const SyslogSender = struct {
     thread: ?std.Thread,
     dropped_count: u64,
 
+    // Persistent socket fields (GAP-021 / PERF-010)
+    udp_socket: ?std.posix.socket_t = null,
+    tcp_socket: ?std.posix.socket_t = null,
+
+    // DNS cache fields (PERF-006)
+    resolved_addr: ?std.net.Address = null,
+    dns_cache_ttl_ms: u32 = 300_000, // 5 minutes
+    last_dns_resolve_ms: i64 = 0,
+
     pub fn init(
         allocator: std.mem.Allocator,
         syslog_config: config.SyslogSinkConfig,
@@ -74,6 +83,11 @@ pub const SyslogSender = struct {
             .should_stop = std.atomic.Value(bool).init(false),
             .thread = null,
             .dropped_count = 0,
+            .udp_socket = null,
+            .tcp_socket = null,
+            .resolved_addr = null,
+            .dns_cache_ttl_ms = 300_000,
+            .last_dns_resolve_ms = 0,
         };
 
         if (sender.config.protocol == .tls) {
@@ -94,6 +108,16 @@ pub const SyslogSender = struct {
         if (self.thread) |thread| {
             self.should_stop.store(true, .seq_cst);
             thread.join();
+        }
+
+        // Close persistent sockets
+        if (self.udp_socket) |sock| {
+            std.posix.close(sock);
+            self.udp_socket = null;
+        }
+        if (self.tcp_socket) |sock| {
+            std.posix.close(sock);
+            self.tcp_socket = null;
         }
 
         while (self.queue.pop()) |msg| {
@@ -184,31 +208,64 @@ pub const SyslogSender = struct {
         }
     }
 
-    fn sendUdp(self: *SyslogSender, message: []const u8) !void {
-        const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0);
-        defer std.posix.close(socket);
-
+    /// Resolve or return the cached address, re-resolving when the DNS TTL expires.
+    fn resolveOrCached(self: *SyslogSender) !std.net.Address {
+        const now_i128 = self.clock.nowMs();
+        // Safe truncation: millisecond timestamps fit in i64 for the foreseeable future
+        const now_ms: i64 = @intCast(now_i128);
+        const elapsed = now_ms -| self.last_dns_resolve_ms;
+        if (self.resolved_addr != null and elapsed >= 0 and elapsed < self.dns_cache_ttl_ms) {
+            return self.resolved_addr.?;
+        }
         const addr = try resolveHostToAddress(self.allocator, self.config.host, self.config.port);
+        self.resolved_addr = addr;
+        self.last_dns_resolve_ms = now_ms;
+        return addr;
+    }
+
+    fn sendUdp(self: *SyslogSender, message: []const u8) !void {
+        // Create socket on first use, reuse thereafter
+        if (self.udp_socket == null) {
+            self.udp_socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0);
+        }
+        const socket = self.udp_socket.?;
+
+        const addr = try self.resolveOrCached();
         _ = try std.posix.sendto(socket, message, 0, &addr.any, addr.getOsSockLen());
     }
 
     fn sendTcp(self: *SyslogSender, message: []const u8) !void {
-        const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-        defer std.posix.close(socket);
+        // Create and connect socket on first use, reuse thereafter
+        if (self.tcp_socket == null) {
+            const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
+            errdefer std.posix.close(socket);
 
-        // Set a 5-second send timeout to avoid blocking indefinitely on
-        // unresponsive peers.
-        const timeout = std.posix.timeval{ .sec = 5, .usec = 0 };
-        std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch {};
+            // Set a 5-second send timeout to avoid blocking indefinitely on
+            // unresponsive peers.
+            const timeout = std.posix.timeval{ .sec = 5, .usec = 0 };
+            std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch {};
 
-        const addr = try resolveHostToAddress(self.allocator, self.config.host, self.config.port);
-        try std.posix.connect(socket, &addr.any, addr.getOsSockLen());
+            const addr = try self.resolveOrCached();
+            try std.posix.connect(socket, &addr.any, addr.getOsSockLen());
+
+            self.tcp_socket = socket;
+        }
+        const socket = self.tcp_socket.?;
 
         const length_prefix = try std.fmt.allocPrint(self.allocator, "{d} ", .{message.len});
         defer self.allocator.free(length_prefix);
 
-        _ = try std.posix.send(socket, length_prefix, 0);
-        _ = try std.posix.send(socket, message, 0);
+        _ = std.posix.send(socket, length_prefix, 0) catch |err| {
+            // On send error, close socket so it reconnects on next attempt
+            std.posix.close(socket);
+            self.tcp_socket = null;
+            return err;
+        };
+        _ = std.posix.send(socket, message, 0) catch |err| {
+            std.posix.close(socket);
+            self.tcp_socket = null;
+            return err;
+        };
     }
 
     fn sendTls(self: *SyslogSender, message: []const u8) !void {
@@ -292,61 +349,8 @@ pub const MockSyslogSender = struct {
     }
 };
 
-pub fn RingBuffer(comptime T: type) type {
-    return struct {
-        const Self = @This();
-
-        items: []T,
-        head: usize,
-        tail: usize,
-        count: usize,
-        allocator: std.mem.Allocator,
-
-        pub fn init(allocator: std.mem.Allocator, capacity: usize) error{OutOfMemory}!Self {
-            return Self{
-                .items = try allocator.alloc(T, capacity),
-                .head = 0,
-                .tail = 0,
-                .count = 0,
-                .allocator = allocator,
-            };
-        }
-
-        pub fn deinit(self: *Self) void {
-            self.allocator.free(self.items);
-        }
-
-        pub fn push(self: *Self, item: T) bool {
-            if (self.count >= self.items.len) {
-                return false;
-            }
-
-            self.items[self.tail] = item;
-            self.tail = (self.tail + 1) % self.items.len;
-            self.count += 1;
-            return true;
-        }
-
-        pub fn pop(self: *Self) ?T {
-            if (self.count == 0) {
-                return null;
-            }
-
-            const item = self.items[self.head];
-            self.head = (self.head + 1) % self.items.len;
-            self.count -= 1;
-            return item;
-        }
-
-        pub fn isFull(self: *Self) bool {
-            return self.count >= self.items.len;
-        }
-
-        pub fn isEmpty(self: *Self) bool {
-            return self.count == 0;
-        }
-    };
-}
+// RingBuffer extracted to src/ring_buffer.zig (Q16/#36)
+const RingBuffer = @import("ring_buffer.zig").RingBuffer;
 
 test "SyslogSender.init rejects TLS protocol" {
     const allocator = std.testing.allocator;
@@ -445,4 +449,169 @@ test "SyslogSender.getDroppedCount starts at zero" {
     defer sender.deinit();
 
     try std.testing.expectEqual(@as(u64, 0), sender.getDroppedCount());
+}
+
+test "SyslogSender persistent socket fields default to null" {
+    const allocator = std.testing.allocator;
+    var fixed_clock = time.FixedClock.init(1735689600000);
+    const clock = fixed_clock.clock();
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = false,
+        .protocol = .udp,
+        .host = "{{TEST_HOST}}",
+        .port = 514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local0,
+        },
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "test",
+        .host = "test-host",
+        .pid = 1,
+    };
+
+    const identity_config = config.CefIdentityConfig{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    };
+
+    const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
+    defer sender.deinit();
+
+    // Persistent sockets start as null
+    try std.testing.expect(sender.udp_socket == null);
+    try std.testing.expect(sender.tcp_socket == null);
+
+    // DNS cache starts empty
+    try std.testing.expect(sender.resolved_addr == null);
+    try std.testing.expectEqual(@as(i64, 0), sender.last_dns_resolve_ms);
+    try std.testing.expectEqual(@as(u32, 300_000), sender.dns_cache_ttl_ms);
+}
+
+test "SyslogSender deinit closes persistent sockets safely" {
+    const allocator = std.testing.allocator;
+    var fixed_clock = time.FixedClock.init(1735689600000);
+    const clock = fixed_clock.clock();
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = false,
+        .protocol = .udp,
+        .host = "{{TEST_HOST}}",
+        .port = 514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local0,
+        },
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "test",
+        .host = "test-host",
+        .pid = 1,
+    };
+
+    const identity_config = config.CefIdentityConfig{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    };
+
+    const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
+
+    // Manually create a UDP socket to verify deinit closes it
+    sender.udp_socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0);
+
+    // deinit should close it without error
+    sender.deinit();
+}
+
+test "SyslogSender resolveOrCached caches address" {
+    const allocator = std.testing.allocator;
+    var fixed_clock = time.FixedClock.init(1735689600000);
+    const clock = fixed_clock.clock();
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = false,
+        .protocol = .udp,
+        .host = "127.0.0.1", // IP literal avoids actual DNS
+        .port = 514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local0,
+        },
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "test",
+        .host = "test-host",
+        .pid = 1,
+    };
+
+    const identity_config = config.CefIdentityConfig{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    };
+
+    const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
+    defer sender.deinit();
+
+    // First call resolves and caches
+    const addr1 = try sender.resolveOrCached();
+    try std.testing.expect(sender.resolved_addr != null);
+    try std.testing.expect(sender.last_dns_resolve_ms != 0);
+
+    // Second call returns cached (same address)
+    const addr2 = try sender.resolveOrCached();
+    try std.testing.expectEqual(addr1.any.data, addr2.any.data);
+}
+
+test "SyslogSender resolveOrCached re-resolves after TTL" {
+    const allocator = std.testing.allocator;
+
+    // Start with time 1000 ms
+    var fixed_clock = time.FixedClock.init(1000);
+    const clock = fixed_clock.clock();
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = false,
+        .protocol = .udp,
+        .host = "127.0.0.1",
+        .port = 514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local0,
+        },
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "test",
+        .host = "test-host",
+        .pid = 1,
+    };
+
+    const identity_config = config.CefIdentityConfig{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    };
+
+    const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
+    defer sender.deinit();
+
+    // Set a very short TTL for testing
+    sender.dns_cache_ttl_ms = 100;
+
+    // First resolve at t=1000ms
+    _ = try sender.resolveOrCached();
+    const first_resolve_time = sender.last_dns_resolve_ms;
+    try std.testing.expectEqual(@as(i64, 1000), first_resolve_time);
+
+    // Advance clock past TTL (1000 + 100 = 1100, so 1200 is past)
+    fixed_clock.fixed_time_ms = 1200;
+
+    // Should re-resolve (elapsed 200ms >= 100ms ttl)
+    _ = try sender.resolveOrCached();
+    const second_resolve_time = sender.last_dns_resolve_ms;
+    try std.testing.expectEqual(@as(i64, 1200), second_resolve_time);
 }

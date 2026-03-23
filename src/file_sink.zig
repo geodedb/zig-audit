@@ -18,6 +18,7 @@ pub const FileSink = struct {
     clock: time.Clock,
     current_file: ?std.fs.File,
     current_size: u64,
+    writes_since_sync: u32,
     mutex: std.Thread.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, file_config: config.FileSinkConfig, clock: time.Clock) !*FileSink {
@@ -28,6 +29,7 @@ pub const FileSink = struct {
             .clock = clock,
             .current_file = null,
             .current_size = 0,
+            .writes_since_sync = 0,
             .mutex = std.Thread.Mutex{},
         };
 
@@ -59,8 +61,8 @@ pub const FileSink = struct {
         if (self.current_file) |file| {
             try file.writeAll(json_line);
             try file.writeAll("\n");
-            try file.sync();
             self.current_size += json_line.len + 1;
+            try self.maybeFsync(file);
         }
     }
 
@@ -86,8 +88,24 @@ pub const FileSink = struct {
         if (self.current_file) |file| {
             try file.writeAll(error_obj);
             try file.writeAll("\n");
-            try file.sync();
             self.current_size += error_obj.len + 1;
+            try self.maybeFsync(file);
+        }
+    }
+
+    /// Perform fsync based on the configured sync_mode. Must be called while
+    /// the mutex is held.
+    fn maybeFsync(self: *FileSink, file: std.fs.File) !void {
+        switch (self.config.sync_mode) {
+            .per_event => try file.sync(),
+            .periodic => {
+                self.writes_since_sync += 1;
+                if (self.writes_since_sync >= self.config.sync_interval) {
+                    try file.sync();
+                    self.writes_since_sync = 0;
+                }
+            },
+            .none => {},
         }
     }
 
@@ -276,4 +294,128 @@ test "file sink rotation" {
         break :blk true;
     };
     try testing.expect(backup1_exists);
+}
+
+test "FileSink sync_mode per_event is default" {
+    const testing = std.testing;
+    const file_config = config.FileSinkConfig{
+        .enabled = false,
+        .path = "/dev/null",
+        .max_bytes = 1024,
+        .backup_count = 0,
+    };
+    try testing.expectEqual(config.SyncMode.per_event, file_config.sync_mode);
+    try testing.expectEqual(@as(u32, 100), file_config.sync_interval);
+}
+
+test "FileSink sync_mode none skips fsync" {
+    const testing = std.testing;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const test_dir = "zig-out/tmp/test-sync-none";
+    std.fs.cwd().makePath(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/audit.log",
+        .max_bytes = 1048576,
+        .backup_count = 0,
+        .sync_mode = .none,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+    defer sink.deinit();
+
+    const event = events.AuditEvent{
+        .category = "test",
+        .action = "sync_none",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    // Write should succeed even with sync_mode = .none
+    try sink.write(&event, null);
+
+    // writes_since_sync stays at 0 because .none never increments it
+    try testing.expectEqual(@as(u32, 0), sink.writes_since_sync);
+}
+
+test "FileSink sync_mode periodic increments counter" {
+    const testing = std.testing;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const test_dir = "zig-out/tmp/test-sync-periodic";
+    std.fs.cwd().makePath(test_dir) catch {};
+    defer std.fs.cwd().deleteTree(test_dir) catch {};
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/audit.log",
+        .max_bytes = 1048576,
+        .backup_count = 0,
+        .sync_mode = .periodic,
+        .sync_interval = 5,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+    defer sink.deinit();
+
+    const event = events.AuditEvent{
+        .category = "test",
+        .action = "sync_periodic",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    // Write 3 events -- counter should be at 3 (interval is 5)
+    try sink.write(&event, null);
+    try sink.write(&event, null);
+    try sink.write(&event, null);
+    try testing.expectEqual(@as(u32, 3), sink.writes_since_sync);
+
+    // Write 2 more -- counter hits 5, fsync fires, counter resets to 0
+    try sink.write(&event, null);
+    try sink.write(&event, null);
+    try testing.expectEqual(@as(u32, 0), sink.writes_since_sync);
+
+    // Write 1 more -- counter goes to 1
+    try sink.write(&event, null);
+    try testing.expectEqual(@as(u32, 1), sink.writes_since_sync);
+}
+
+test "SyncMode.fromString parses valid modes" {
+    const testing = std.testing;
+    try testing.expectEqual(config.SyncMode.per_event, try config.SyncMode.fromString("per_event"));
+    try testing.expectEqual(config.SyncMode.periodic, try config.SyncMode.fromString("periodic"));
+    try testing.expectEqual(config.SyncMode.none, try config.SyncMode.fromString("none"));
+    try testing.expectError(error.InvalidSyncMode, config.SyncMode.fromString("invalid"));
 }

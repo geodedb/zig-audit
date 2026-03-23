@@ -85,11 +85,26 @@ pub const IdentityConfig = struct {
     cef: CefIdentityConfig,
 };
 
+pub const SyncMode = enum {
+    per_event, // fsync after every write (safest, slowest)
+    periodic, // fsync every N events (default: 100)
+    none, // no explicit fsync — let OS handle it
+
+    pub fn fromString(s: []const u8) !SyncMode {
+        if (std.mem.eql(u8, s, "per_event")) return .per_event;
+        if (std.mem.eql(u8, s, "periodic")) return .periodic;
+        if (std.mem.eql(u8, s, "none")) return .none;
+        return error.InvalidSyncMode;
+    }
+};
+
 pub const FileSinkConfig = struct {
     enabled: bool,
     path: []const u8,
     max_bytes: u64,
     backup_count: u32,
+    sync_mode: SyncMode = .per_event,
+    sync_interval: u32 = 100,
 };
 
 pub const SyslogRfc5424Config = struct {
@@ -246,11 +261,26 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     const sinks_obj = sinks_value.object;
 
     const file_obj = try jsonObject(sinks_obj, "file");
+
+    const sync_mode: SyncMode = blk: {
+        const val = file_obj.get("sync_mode") orelse break :blk .per_event;
+        if (val != .string) return error.InvalidConfig;
+        break :blk SyncMode.fromString(val.string) catch return error.InvalidConfig;
+    };
+
+    const sync_interval: u32 = blk: {
+        const val = file_obj.get("sync_interval") orelse break :blk 100;
+        if (val != .integer) return error.InvalidConfig;
+        break :blk @as(u32, @intCast(val.integer));
+    };
+
     const file_sink = FileSinkConfig{
         .enabled = try jsonBool(file_obj, "enabled"),
         .path = try allocator.dupe(u8, try jsonString(file_obj, "path")),
         .max_bytes = @as(u64, @intCast(try jsonInteger(file_obj, "max_bytes"))),
         .backup_count = @as(u32, @intCast(try jsonInteger(file_obj, "backup_count"))),
+        .sync_mode = sync_mode,
+        .sync_interval = sync_interval,
     };
 
     const syslog_obj = try jsonObject(sinks_obj, "syslog");
@@ -403,6 +433,59 @@ test "parseConfig accepts valid complete config" {
     try std.testing.expectEqualStrings("svc", cfg.service.name);
     try std.testing.expectEqualStrings("h", cfg.service.host);
     try std.testing.expectEqual(@as(u32, 1), cfg.service.pid);
+
+    // sync_mode defaults to per_event when absent from JSON
+    try std.testing.expectEqual(SyncMode.per_event, cfg.sinks.file.sync_mode);
+    try std.testing.expectEqual(@as(u32, 100), cfg.sinks.file.sync_interval);
+}
+
+test "parseConfig parses sync_mode and sync_interval from JSON" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{
+        \\  "version": 1,
+        \\  "service": {"name": "svc", "host": "h", "pid": 1},
+        \\  "identity": {"cef": {"vendor": "V", "product": "P", "version": "1"}},
+        \\  "sinks": {
+        \\    "file": {"enabled": false, "path": "/tmp/a.log", "max_bytes": 1024, "backup_count": 1, "sync_mode": "periodic", "sync_interval": 50},
+        \\    "syslog": {"enabled": false, "protocol": "udp", "host": "localhost", "port": 514, "rfc5424": {"facility": "local0"}}
+        \\  },
+        \\  "filters": {"default_deny": false, "allow_fields": [], "deny_key_patterns": [], "pii_mode": "off", "pci_mode": false}
+        \\}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    var cfg = try parseConfig(allocator, parsed.value);
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(SyncMode.periodic, cfg.sinks.file.sync_mode);
+    try std.testing.expectEqual(@as(u32, 50), cfg.sinks.file.sync_interval);
+}
+
+test "parseConfig parses sync_mode none" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{
+        \\  "version": 1,
+        \\  "service": {"name": "svc", "host": "h", "pid": 1},
+        \\  "identity": {"cef": {"vendor": "V", "product": "P", "version": "1"}},
+        \\  "sinks": {
+        \\    "file": {"enabled": false, "path": "/tmp/a.log", "max_bytes": 1024, "backup_count": 1, "sync_mode": "none"},
+        \\    "syslog": {"enabled": false, "protocol": "udp", "host": "localhost", "port": 514, "rfc5424": {"facility": "local0"}}
+        \\  },
+        \\  "filters": {"default_deny": false, "allow_fields": [], "deny_key_patterns": [], "pii_mode": "off", "pci_mode": false}
+        \\}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    var cfg = try parseConfig(allocator, parsed.value);
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(SyncMode.none, cfg.sinks.file.sync_mode);
+    // sync_interval defaults to 100 when not provided
+    try std.testing.expectEqual(@as(u32, 100), cfg.sinks.file.sync_interval);
 }
 
 /// Create a test configuration with sensible defaults.
