@@ -58,6 +58,7 @@ pub const SyslogSender = struct {
     thread: ?std.Thread,
     tls_pool: [MAX_POOL_SIZE]?PooledConnection,
     pool_mutex: std.Thread.Mutex,
+    dropped_count: u64,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -84,6 +85,7 @@ pub const SyslogSender = struct {
             .thread = null,
             .tls_pool = tls_pool,
             .pool_mutex = std.Thread.Mutex{},
+            .dropped_count = 0,
         };
 
         if (sender.config.protocol == .tls) {
@@ -132,11 +134,21 @@ pub const SyslogSender = struct {
         defer self.mutex.unlock();
 
         if (!self.queue.push(syslog_line)) {
+            if (self.dropped_count == 0) {
+                log.warn("syslog queue full; dropping oldest message (ring buffer overflow)", .{});
+            }
+            self.dropped_count += 1;
             if (self.queue.pop()) |old_msg| {
                 self.allocator.free(old_msg);
             }
             _ = self.queue.push(syslog_line);
         }
+    }
+
+    pub fn getDroppedCount(self: *SyslogSender) u64 {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        return self.dropped_count;
     }
 
     fn formatRfc5424(self: *SyslogSender, event: *const events.AuditEvent, cef_msg: []const u8) ![]const u8 {
@@ -458,4 +470,37 @@ test "RingBuffer: basic push and pop" {
 
     try std.testing.expect(rb.isEmpty());
     try std.testing.expect(rb.pop() == null);
+}
+
+test "SyslogSender.getDroppedCount starts at zero" {
+    const allocator = std.testing.allocator;
+    var fixed_clock = time.FixedClock.init(1735689600000);
+    const clock = fixed_clock.clock();
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = false, // disabled so no worker thread spawned
+        .protocol = .udp,
+        .host = "{{TEST_HOST}}",
+        .port = 514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local0,
+        },
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "test",
+        .host = "test-host",
+        .pid = 1,
+    };
+
+    const identity_config = config.CefIdentityConfig{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    };
+
+    const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
+    defer sender.deinit();
+
+    try std.testing.expectEqual(@as(u64, 0), sender.getDroppedCount());
 }

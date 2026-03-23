@@ -238,6 +238,38 @@ pub fn detectValueType(value: []const u8) ?RedactionToken {
     return null;
 }
 
+/// Like detectValueType, but respects pii_mode and pci_mode settings.
+/// When pii_mode == .off, PII types (email, phone) are not detected.
+/// PCI types (card, cvv) are always detected when pci_mode is true,
+/// and follow normal detection when pci_mode is false.
+fn detectValueTypeFiltered(value: []const u8, filters_cfg: *const config.FiltersConfig) ?RedactionToken {
+    if (isJwt(value)) return .jwt;
+    if (isPan(value)) return .card;
+    if (isPemPrivateKey(value)) return .private_key;
+
+    if (filters_cfg.pii_mode != .off) {
+        if (isEmail(value)) return .email;
+        if (isPhone(value)) return .phone;
+    }
+
+    if (value.len >= 64 and isHexString(value)) return .token;
+    if (value.len == 3 and isAllDigits(value)) return .cvv;
+
+    return null;
+}
+
+/// Produce the redacted (or masked) string for a detected value type,
+/// respecting pii_mode. When pii_mode == .mask and the detected type
+/// is email or phone, returns a masked version instead of the full
+/// redaction token.
+fn redactOrMaskValue(allocator: std.mem.Allocator, value: []const u8, detected: RedactionToken, filters_cfg: *const config.FiltersConfig) ![]const u8 {
+    if (filters_cfg.pii_mode == .mask) {
+        if (detected == .email) return maskEmail(allocator, value);
+        if (detected == .phone) return maskPhone(allocator, value);
+    }
+    return allocator.dupe(u8, detected.toString());
+}
+
 fn isHexString(s: []const u8) bool {
     for (s) |c| {
         if (!((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F'))) {
@@ -292,11 +324,30 @@ fn filterAndRedactMetadataRecursive(
                         try filtered_map.put(try allocator.dupe(u8, key), processed_value);
                     },
                     .redact => {
-                        const redaction_str = if (isSensitiveKey(allocator, key)) |redaction_token|
-                            redaction_token.toString()
-                        else
-                            "[REDACTED]";
-                        const redacted = std.json.Value{ .string = try allocator.dupe(u8, redaction_str) };
+                        // Determine the redacted string, applying masking when pii_mode == .mask
+                        const redacted_str = redact_blk: {
+                            // First check if the value itself is a detectable type
+                            if (value == .string) {
+                                if (detectValueType(value.string)) |detected| {
+                                    break :redact_blk try redactOrMaskValue(allocator, value.string, detected, filters_cfg);
+                                }
+                            }
+                            // Fall back to key-based redaction token
+                            if (isSensitiveKey(allocator, key)) |key_token| {
+                                // For key-based PII redaction with masking, check value
+                                if (filters_cfg.pii_mode == .mask and value == .string) {
+                                    if (key_token == .email and isEmail(value.string)) {
+                                        break :redact_blk try maskEmail(allocator, value.string);
+                                    }
+                                    if (key_token == .phone and isPhone(value.string)) {
+                                        break :redact_blk try maskPhone(allocator, value.string);
+                                    }
+                                }
+                                break :redact_blk try allocator.dupe(u8, key_token.toString());
+                            }
+                            break :redact_blk try allocator.dupe(u8, "[REDACTED]");
+                        };
+                        const redacted = std.json.Value{ .string = redacted_str };
                         try filtered_map.put(try allocator.dupe(u8, key), redacted);
                     },
                     .drop_event => {
@@ -340,10 +391,10 @@ fn redactValueRecursive(
             for (arr.items) |item| {
                 switch (item) {
                     .string => |s| {
-                        // Apply value-type detection on string elements
-                        if (detectValueType(s)) |detected_token| {
+                        // Apply value-type detection on string elements, respecting modes
+                        if (detectValueTypeFiltered(s, filters_cfg)) |detected_token| {
                             try redacted_array.append(std.json.Value{
-                                .string = try allocator.dupe(u8, detected_token.toString()),
+                                .string = try redactOrMaskValue(allocator, s, detected_token, filters_cfg),
                             });
                         } else {
                             try redacted_array.append(std.json.Value{
@@ -370,9 +421,9 @@ fn redactValueRecursive(
             break :blk std.json.Value{ .array = redacted_array };
         },
         .string => |s| blk: {
-            // Apply value-type detection on allowed string values
-            if (detectValueType(s)) |detected_token| {
-                break :blk std.json.Value{ .string = try allocator.dupe(u8, detected_token.toString()) };
+            // Apply value-type detection on allowed string values, respecting modes
+            if (detectValueTypeFiltered(s, filters_cfg)) |detected_token| {
+                break :blk std.json.Value{ .string = try redactOrMaskValue(allocator, s, detected_token, filters_cfg) };
             }
             break :blk std.json.Value{ .string = try allocator.dupe(u8, s) };
         },
@@ -391,6 +442,14 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
 
     const sensitive_token = isSensitiveKey(allocator, key);
 
+    // When pci_mode is true, enforce PAN/CVV detection regardless of allow_fields
+    if (filters.pci_mode and value == .string) {
+        const detected = detectValueType(value.string);
+        if (detected == .card or detected == .cvv) {
+            return .redact;
+        }
+    }
+
     if (is_denied or sensitive_token != null) {
         if (value == .string) {
             const str_value = value.string;
@@ -406,7 +465,7 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
     }
 
     if (value == .string) {
-        const detected_type = detectValueType(value.string);
+        const detected_type = detectValueTypeFiltered(value.string, filters);
         if (detected_type != null) {
             return .redact;
         }

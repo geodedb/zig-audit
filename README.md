@@ -40,12 +40,35 @@ exe.root_module.addImport("audit", audit.module("audit"));
 ## Quick Start
 
 ```zig
-const std = @import("std");
 const audit = @import("audit");
 
 pub fn main() !void {
-    try audit.init(.{
-        .debug = true,
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Load configuration from a JSON file
+    var cfg = try audit.config.loadConfig(allocator, "audit.json");
+
+    // Create a logger with file + syslog sinks
+    const logger = try audit.logger.buildAuditLogger(allocator, &cfg);
+    defer logger.deinit();
+
+    // Emit an audit event
+    try logger.audit(&.{
+        .category = "auth",
+        .action   = "login",
+        .outcome  = .success,
+        .severity = .INFO,
+        .actor_id = "jane.doe",
+        .ts_unix_ms = 0, // 0 = use injected clock
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip  = null,
+        .trace_id   = null,
+        .span_id    = null,
+        .metadata   = null,
     });
 }
 ```

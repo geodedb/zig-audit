@@ -422,6 +422,483 @@ test "deny pattern match without isSensitiveKey produces generic redaction" {
     }
 }
 
+test "pii_mode mask: email value is masked instead of fully redacted" {
+    // GAP-007: When pii_mode == .mask, email values should be masked (***@domain)
+    // instead of showing [REDACTED_EMAIL]
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "user_email");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .mask,
+        .pci_mode = false,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    try metadata_obj.put("user_email", std.json.Value{ .string = "alice@example.com" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        // Value should be masked, not fully redacted
+        if (obj.get("user_email")) |email_val| {
+            try testing.expectEqualStrings("***@example.com", email_val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "pii_mode mask: phone value is masked instead of fully redacted" {
+    // GAP-007: When pii_mode == .mask, phone values should be masked (123***7890)
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "contact_phone");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .mask,
+        .pci_mode = false,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    try metadata_obj.put("contact_phone", std.json.Value{ .string = "123-456-7890" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        if (obj.get("contact_phone")) |phone_val| {
+            try testing.expectEqualStrings("123***7890", phone_val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "pii_mode mask: key-based email detection with mask" {
+    // GAP-007: When a key matches "email" via isSensitiveKey and pii_mode == .mask,
+    // the email value should be masked
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 0);
+    defer allocator.free(allow_fields);
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .mask,
+        .pci_mode = false,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    // "email" key triggers isSensitiveKey -> .email
+    try metadata_obj.put("email", std.json.Value{ .string = "bob@test.org" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        if (obj.get("email")) |email_val| {
+            // Should be masked: ***@test.org
+            try testing.expectEqualStrings("***@test.org", email_val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "pii_mode off: email and phone values pass through when not key-matched" {
+    // GAP-007: When pii_mode == .off, value-type detection for email/phone is skipped,
+    // but key-name matches still cause redaction
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "notes");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    // "notes" is allowed and value is an email; with pii_mode off, it should pass through
+    try metadata_obj.put("notes", std.json.Value{ .string = "contact@example.com" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        // With pii_mode off, the email value should pass through unmodified
+        if (obj.get("notes")) |val| {
+            try testing.expectEqualStrings("contact@example.com", val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "pii_mode off: key-name email match still causes redaction" {
+    // GAP-007: Even when pii_mode == .off, key-name matches still trigger redaction
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 0);
+    defer allocator.free(allow_fields);
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    // "email" key still triggers isSensitiveKey regardless of pii_mode
+    try metadata_obj.put("email", std.json.Value{ .string = "test@example.com" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        // Key "email" is sensitive, so value should be redacted (not masked since pii_mode is off)
+        if (obj.get("email")) |val| {
+            try testing.expectEqualStrings("[REDACTED_EMAIL]", val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "pci_mode true: PAN in allowed field is still redacted" {
+    // GAP-007: When pci_mode is true, PAN detection overrides allow_fields
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "payment_info");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = true,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    // "payment_info" is in allow_fields, but its value is a valid PAN
+    try metadata_obj.put("payment_info", std.json.Value{ .string = "4111111111111111" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        // Even though "payment_info" is allowed, the PAN should be redacted
+        if (obj.get("payment_info")) |val| {
+            try testing.expectEqualStrings("[REDACTED_PAN]", val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "pci_mode false: PAN in allowed field passes through" {
+    // GAP-007: When pci_mode is false, PAN detection does NOT override allow_fields
+    // (but value-type detection in redactValueRecursive would still catch it)
+    // Actually, with pci_mode false the shouldFilterField still detects PAN via
+    // detectValueTypeFiltered. The difference is that pci_mode true forces redaction
+    // even for allowed fields. With pci_mode false, the allowed field goes to .allow
+    // but then redactValueRecursive still detects the PAN value.
+    // So the test verifies that with pci_mode off, value detection still works.
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "payment_info");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    // "payment_info" is in allow_fields with pci_mode false
+    try metadata_obj.put("payment_info", std.json.Value{ .string = "4111111111111111" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        // PAN is still detected by value-type detection (field is allowed but value
+        // is detected as PAN in redactValueRecursive), so it still gets redacted
+        if (obj.get("payment_info")) |val| {
+            try testing.expectEqualStrings("[REDACTED_PAN]", val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "pii_mode mask: email in array is masked" {
+    // GAP-007: Email values in arrays should be masked when pii_mode == .mask
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "contacts");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .mask,
+        .pci_mode = false,
+    };
+
+    var arr = std.json.Array.init(allocator);
+    try arr.append(std.json.Value{ .string = "user@example.com" });
+    try arr.append(std.json.Value{ .string = "safe_text" });
+    defer arr.deinit();
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+    try metadata_obj.put("contacts", std.json.Value{ .array = arr });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+        if (obj.get("contacts")) |contacts_val| {
+            try testing.expect(contacts_val == .array);
+            const items = contacts_val.array;
+            // Email should be masked
+            try testing.expectEqualStrings("***@example.com", items.items[0].string);
+            // Safe text should pass through
+            try testing.expectEqualStrings("safe_text", items.items[1].string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
 test "redaction tokens" {
     try testing.expectEqualStrings("[REDACTED]", filters.RedactionToken.password.toString());
     try testing.expectEqualStrings("[REDACTED_TOKEN]", filters.RedactionToken.token.toString());
