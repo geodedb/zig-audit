@@ -9,21 +9,23 @@ Scope: All source files in `src/` and `build.zig.zon`
 
 ## Summary
 
-| Severity | Count |
-|----------|-------|
-| Critical | 1 |
-| High | 5 |
-| Medium | 4 |
-| Low | 4 |
-| **Total** | **14** |
+| Severity | Open | Resolved | Total |
+|----------|------|----------|-------|
+| Critical | 0 | 1 (S1) | 1 |
+| High | 0 | 5 (S2, S3, S4, S5, S6) | 5 |
+| Medium | 2 (S9, S12*) | 3 (S7, S8, S10) | 4+1* |
+| Low | 3 (SC-1, S11, S13) | 0 | 4 |
+| **Total** | **5** | **9** | **14** |
 
-**Top 5 risks:**
+*Note: S12 (`i128`-to-`i64` cast) is moot after GAP-026/GAP-027 removed the dead code containing the cast.*
 
-1. **S1** -- CEF escape functions are no-ops, enabling log injection and SIEM compromise (Risk 36, Critical)
-2. **S2** -- `pii_mode`/`pci_mode` config flags parsed but never enforced, giving false compliance assurance (Risk 32, High)
-3. **S3** -- Metadata redaction skips nested objects/arrays, leaking sensitive data in deep structures (Risk 32, High)
-4. **S4** -- Syslog sends audit events over plaintext UDP/TCP with no encryption warning to callers (Risk 28, High)
-5. **S5** -- Redaction bypass via unrecognized key names; only a hardcoded substring list is checked (Risk 28, High)
+**All Critical and High severity findings are resolved.**
+
+**Remaining open findings** (Medium/Low, none blocking 0.1.0 release):
+1. **S9** (Medium) -- File path from config not sanitized (CWE-22)
+2. **SC-1** (Low) -- DNS dependency pinned to commit, not tag (blocked -- cross-repo)
+3. **S11** (Low) -- DNS queries unauthenticated (documentation-only fix)
+4. **S13** (Low) -- `@panic` in MockSyslogSender init (test code only)
 
 **No real secrets were found.** Two gitleaks findings on test fixtures (`TEST_TRACE_ID`, `TEST_SPAN_ID`) are confirmed false positives.
 
@@ -47,19 +49,19 @@ Risk Score = Impact (1-5) x Likelihood (1-5) x 4
 
 | Rank | ID | Severity | Risk | Finding | Component | CWE / OWASP | Evidence | Fix | Status |
 |------|----|----------|------|---------|-----------|-------------|----------|-----|--------|
-| 1 | S1 | Critical | 36 | CEF escape no-ops -- log injection | `src/cef.zig` | CWE-117 / A03:2021 | `cef.zig:152-162` | Implement escaping in `escapeHeader`, `escapeValue`, `escapeKey` | Open |
-| 2 | S2 | High | 32 | `pii_mode`/`pci_mode` parsed, never consumed | `src/config.zig`, `src/filters.zig` | CWE-311 / PCI DSS 3.4 | `config.zig:122-123` | Wire modes into `filterAndRedactMetadata` | Open |
-| 3 | S3 | High | 32 | Redaction skips nested objects/arrays | `src/filters.zig` | CWE-312 / A04:2021 | `filters.zig:250-282` | Recurse `filterAndRedactMetadata` into nested values | Open |
-| 4 | S4 | High | 28 | Plaintext syslog UDP/TCP | `src/syslog.zig` | CWE-319 / A02:2021 | `syslog.zig:203-223` | Warn callers at init; document stunnel requirement | Open |
-| 5 | S5 | High | 28 | Redaction bypass via unrecognized keys | `src/filters.zig` | CWE-184, CWE-312 / A04:2021 | `filters.zig:41-87` | Support regex/glob deny patterns; default-deny unrecognized keys | Open |
+| 1 | S1 | Critical | 36 | CEF escape no-ops -- log injection | `src/cef.zig` | CWE-117 / A03:2021 | `cef.zig:152-162` | Implement escaping in `escapeHeader`, `escapeValue`, `escapeKey` | **Resolved** (GAP-006) |
+| 2 | S2 | High | 32 | `pii_mode`/`pci_mode` parsed, never consumed | `src/config.zig`, `src/filters.zig` | CWE-311 / PCI DSS 3.4 | `config.zig:122-123` | Wire modes into `filterAndRedactMetadata` | **Resolved** (GAP-007) |
+| 3 | S3 | High | 32 | Redaction skips nested objects/arrays | `src/filters.zig` | CWE-312 / A04:2021 | `filters.zig:250-282` | Recurse `filterAndRedactMetadata` into nested values | **Resolved** (GAP-008) |
+| 4 | S4 | High | 28 | Plaintext syslog UDP/TCP | `src/syslog.zig` | CWE-319 / A02:2021 | `syslog.zig:203-223` | Warn callers at init; document stunnel requirement | **Resolved** (GAP-011) |
+| 5 | S5 | High | 28 | Redaction bypass via unrecognized keys | `src/filters.zig` | CWE-184, CWE-312 / A04:2021 | `filters.zig:41-87` | Support regex/glob deny patterns; default-deny unrecognized keys | **Resolved** (GAP-010) |
 | 6 | S6 | High | 28 | TLS not implemented, config silently accepted | `src/syslog.zig` | CWE-295, CWE-319 / A02:2021 | `syslog.zig:225-236` | Fail loudly at init when `protocol = .tls` | **Resolved** |
-| 7 | S10 | Medium | 24 | Silent ring buffer overflow drops audit events | `src/syslog.zig` | CWE-770, CWE-779 / A09:2021 | `syslog.zig:128-133` | Emit metric/log on drop; expose overflow count | Open |
-| 8 | S7 | Medium | 20 | PRNG seeded from `microTimestamp` | `src/time.zig` | CWE-330, CWE-338 / A02:2021 | `time.zig:138` | Seed from `std.crypto.random` or OS entropy | **Resolved** |
-| 9 | S8 | Medium | 20 | No `AuditEvent` field validation | `src/events.zig` | CWE-20 / A03:2021 | `events.zig:47-60` | Add `validate()` method with length and format checks | Open |
+| 7 | S10 | Medium | 24 | Silent ring buffer overflow drops audit events | `src/syslog.zig` | CWE-770, CWE-779 / A09:2021 | `syslog.zig:128-133` | Emit metric/log on drop; expose overflow count | **Resolved** (GAP-023) |
+| 8 | S7 | Medium | 20 | PRNG seeded from `microTimestamp` | `src/time.zig` | CWE-330, CWE-338 / A02:2021 | `time.zig:138` | Seed from `std.crypto.random` or OS entropy | **Resolved** (GAP-016) |
+| 9 | S8 | Medium | 20 | No `AuditEvent` field validation | `src/events.zig` | CWE-20 / A03:2021 | `events.zig:47-60` | Add `validate()` method with length and format checks | **Resolved** (GAP-017) |
 | 10 | S9 | Medium | 20 | File path from config not sanitized | `src/file_sink.zig` | CWE-22 / A01:2021 | `file_sink.zig:249-254` | Reject path traversal sequences; restrict to allowed directories | Open |
-| 11 | SC-1 | Low | 12 | DNS dependency pinned to commit, not tag | `build.zig.zon` | CWE-829 / A06:2021 | `build.zig.zon:8-9` | Pin to a tagged release | Open |
+| 11 | SC-1 | Low | 12 | DNS dependency pinned to commit, not tag | `build.zig.zon` | CWE-829 / A06:2021 | `build.zig.zon:8-9` | Pin to a tagged release | Open (blocked -- cross-repo, GAP-029) |
 | 12 | S11 | Low | 12 | DNS queries unauthenticated | `src/syslog.zig` | CWE-350 / A07:2021 | `syslog.zig:21-41` | Document DNS spoofing risk; recommend /etc/hosts or DoH | Open |
-| 13 | S12 | Low | 8 | `i128`-to-`i64` cast truncation | `src/syslog.zig` | CWE-681 / A04:2021 | `syslog.zig:249` | Use `std.math.cast` with overflow check | Open |
+| 13 | S12 | Low | 8 | `i128`-to-`i64` cast truncation | `src/syslog.zig` | CWE-681 / A04:2021 | `syslog.zig:249` | Use `std.math.cast` with overflow check | **Moot** (dead code removed via GAP-026/027) |
 | 14 | S13 | Low | 4 | `@panic` in `MockSyslogSender` init | `src/syslog.zig` | CWE-248 / A11:2021 | `syslog.zig:282` | Return error instead of panicking | Open |
 
 ---

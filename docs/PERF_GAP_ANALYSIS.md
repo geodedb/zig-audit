@@ -46,7 +46,7 @@ Estimated improvement potential: 50-80% allocation reduction, 10-50x file sink t
 | 16 | P3 | 24 | errdefer missing on partial clone | events | `src/events.zig:111-137` -- if clone() fails mid-way, already-duped strings leak | Memory leak on error path; no cleanup of partial allocations | -- | Add errdefer blocks to free each allocation on failure | @benjiv | Backlog | `status::triage` |
 | 17 | Info | 16 | Ring buffer uses mutex not SPSC | syslog | `src/syslog.zig:55-56` -- queue guarded by std.Thread.Mutex | Single-producer single-consumer pattern uses heavyweight mutex | -- | Replace with lock-free SPSC ring buffer; atomic head/tail | @benjiv | As capacity | `status::triage` |
 | 18 | Info | 36 | Syslog worker processes max 32 msgs per 100ms cycle | syslog | `src/syslog.zig:164` -- `var messages: [32][]const u8` fixed batch size | At sustained load, max throughput = 320 msgs/sec regardless of network capacity | -- | Drain entire queue per cycle; or increase batch size dynamically | @benjiv | As capacity | `status::triage` |
-| 19 | Info | 4 | TLS pool fields dead weight | syslog | `src/syslog.zig:59-60` -- `tls_pool` and `pool_mutex` allocated in every SyslogSender | 16 * sizeof(PooledConnection) + mutex overhead; TLS not implemented | -- | Remove until TLS transport is implemented (GAP-005); or gate behind config | @benjiv | As capacity | `status::triage` |
+| 19 | Info | 4 | TLS pool fields dead weight | syslog | `src/syslog.zig:59-60` -- `tls_pool` and `pool_mutex` allocated in every SyslogSender | 16 * sizeof(PooledConnection) + mutex overhead; TLS not implemented | GAP-027 | TLS pool fields removed from SyslogSender | @benjiv | As capacity | `status::resolved` |
 
 ## Findings by Area
 
@@ -184,7 +184,7 @@ PerfSeverity is assigned based on user-facing impact and SLO risk, independent o
 
 ## Cross-References
 
-- GAP-020 in `docs/GAP_ANALYSIS.md` corresponds to PERF-002 (fsync per event).
-- GAP-021 in `docs/GAP_ANALYSIS.md` corresponds to PERF-003 and PERF-010 (socket per message).
-- GAP-022 in `docs/GAP_ANALYSIS.md` corresponds to PERF-004 (JSON round-trip in clone).
-- GAP-027 in `docs/GAP_ANALYSIS.md` corresponds to PERF-019 (TLS pool dead weight).
+- GAP-020 in `docs/GAP_ANALYSIS.md` corresponds to PERF-002 (fsync per event). **Open -- deferred.**
+- GAP-021 in `docs/GAP_ANALYSIS.md` corresponds to PERF-003 and PERF-010 (socket per message). **Open -- deferred.**
+- GAP-022 in `docs/GAP_ANALYSIS.md` corresponds to PERF-004 (JSON round-trip in clone). **Resolved.** Direct cloneJsonValue replaces serialize/parse round-trip.
+- GAP-027 in `docs/GAP_ANALYSIS.md` corresponds to PERF-019 (TLS pool dead weight). **Resolved.** TLS pool fields removed.

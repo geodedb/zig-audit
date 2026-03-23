@@ -10,21 +10,23 @@ Source: Deep quality review of all 9 source modules (2,355 LOC) and 4 test files
 
 ## Summary
 
-| Severity | Count |
-|----------|-------|
-| Critical | 2 |
-| High     | 5 |
-| Medium   | 8 |
-| Low      | 6 |
-| **Total** | **21** |
+| Severity | Open | Resolved | Total |
+|----------|------|----------|-------|
+| Critical | 0 | 2 (Q1, Q2) | 2 |
+| High     | 1 (Q6) | 4 (Q3, Q4, Q5, Q7) | 5 |
+| Medium   | 5 (Q8, Q9, Q11, Q13, Q14, Q15) | 3 (Q10, Q12) | 8 |
+| Low      | 3 (Q16, Q17, Q20) | 3 (Q18, Q19, Q21) | 6 |
+| **Total** | **9** | **12** | **21** |
 
-### Top 5 Risks
+**All Critical findings are resolved. 12 of 21 findings resolved during gap closure.**
 
-1. **Q1 (Critical)**: CEF escape functions are no-ops -- log injection vector in every CEF-formatted message.
-2. **Q2 (Critical)**: IdGen vtable dispatch passes `self.vtable` address instead of struct address -- undefined behavior on every traceId/spanId/requestId call.
-3. **Q5 (High)**: Config parser has 24 `.?` force-unwrap sites -- any missing JSON field causes a panic instead of a recoverable error.
-4. **Q4 (High)**: Redaction silently drops fields when `deny_key_patterns` matches but `isSensitiveKey` returns null -- data loss without notification.
-5. **Q6 (High)**: File rotation silently swallows rename errors -- log data can be silently lost during rotation failures.
+### Remaining Top Risks
+
+1. **Q6 (High)**: File rotation silently swallows rename errors -- log data can be silently lost during rotation failures.
+2. **Q8 (Medium)**: nowRfc3339Impl duplicated between SystemClock and FixedClock.
+3. **Q9 (Medium)**: formatRfc5424 logic duplicated between SyslogSender and MockSyslogSender.
+4. **Q11 (Medium)**: requestIdImpl returns "" on OOM instead of error.
+5. **Q13 (Medium)**: truncateEvent result allocated and immediately freed.
 
 ---
 
@@ -32,27 +34,27 @@ Source: Deep quality review of all 9 source modules (2,355 LOC) and 4 test files
 
 | Rank | ID | Severity | PriorityScore | Category | Finding | Component | Evidence | Issue | Fix Summary | Owner | ETA | Status |
 |------|-----|----------|---------------|----------|---------|-----------|----------|-------|-------------|-------|-----|--------|
-| 1 | Q1 | Critical | 100 | api-contract | CEF escape functions are no-ops | `src/cef.zig` | `escapeHeader`, `escapeValue`, `escapeKey` at lines 152-162 return input unmodified; `escapeCefString` exists at line 164 but is never called | -- | Wire `escapeCefString` into `escapeHeader`/`escapeValue`/`escapeKey` or replace those stubs with allocating escape logic | TBD | S | triage |
+| 1 | Q1 | Critical | 100 | api-contract | CEF escape functions are no-ops | `src/cef.zig` | `escapeHeader`, `escapeValue`, `escapeKey` at lines 152-162 return input unmodified; `escapeCefString` exists at line 164 but is never called | GAP-006 | Replaced no-op escapes with allocating implementations; 8 new tests | @benjiv | S | **resolved** |
 | 2 | Q2 | Critical | 100 | architecture | IdGen vtable dispatch passes wrong pointer as context | `src/time.zig` | Lines 115-125: `self.vtable.traceId(@ptrCast(@constCast(self.vtable)), buf)` passes the vtable address, not the struct address; impl functions cast this to `*SystemIdGen` -- UB | -- | Add a `context: *anyopaque` field to `IdGen` (like `Clock` already has) and pass it instead of the vtable pointer | TBD | S | resolved |
-| 3 | Q5 | High | 80 | architecture | Config parser panics on malformed JSON | `src/config.zig` | 24 `.?` force-unwrap sites in `parseConfig` (lines 187-252); any missing or wrong-typed field triggers unreachable panic | -- | Replace each `.?` with `orelse return error.MissingField` and add typed-union checks | TBD | M | triage |
-| 4 | Q4 | High | 80 | api-contract | Redaction silently drops fields on deny-pattern match without sensitive-key match | `src/filters.zig` | Lines 266-271: when `shouldFilterField` returns `.redact` but `isSensitiveKey` returns `null`, the field is silently omitted from output | -- | Fall back to a generic `[REDACTED]` token when `isSensitiveKey` returns null but the field is denied | TBD | S | triage |
+| 3 | Q5 | High | 80 | architecture | Config parser panics on malformed JSON | `src/config.zig` | 24 `.?` force-unwrap sites in `parseConfig` (lines 187-252); any missing or wrong-typed field triggers unreachable panic | GAP-018 | Replaced all force-unwraps with typed helpers; 8 inline tests | @benjiv | M | **resolved** |
+| 4 | Q4 | High | 80 | api-contract | Redaction silently drops fields on deny-pattern match without sensitive-key match | `src/filters.zig` | Lines 266-271: when `shouldFilterField` returns `.redact` but `isSensitiveKey` returns `null`, the field is silently omitted from output | GAP-008 | Fixed: generic `[REDACTED]` token used when isSensitiveKey returns null | @benjiv | S | **resolved** |
 | 5 | Q6 | High | 64 | maintainability | File rotation silently swallows rename errors | `src/file_sink.zig` | Lines 237, 243, 251: `catch {}` on `rename` and `makePath` calls; rotation failures produce no diagnostic output | -- | Log warnings on rotation errors; propagate fatal errors (e.g., permission denied) | TBD | S | triage |
 | 6 | Q3 | High | 60 | maintainability | freeJsonValue duplicated 3x, cloneJsonValue duplicated 4x | `src/events.zig`, `src/file_sink.zig`, `src/filters.zig`, `src/logger.zig` | Identical `freeJsonValue` at events.zig:87, file_sink.zig:99, logger.zig:205; identical `cloneJsonValue` at events.zig:140, file_sink.zig:189, filters.zig:320, logger.zig:177 (~180 LOC total) | -- | Extract into a shared `json_util.zig` module; import from all consumers | TBD | S | resolved |
-| 7 | Q7 | High | 60 | tests | No test coverage for config parsing error paths | `src/config.zig`, `tests/` | Zero test files reference `loadConfig`, `parseConfig`, `ConfigNotFound`, `InvalidJson`, or `MissingVersion`; 24 panic-prone unwrap sites are untested | -- | Add tests for missing fields, wrong types, missing file, invalid JSON syntax, unsupported version | TBD | M | triage |
+| 7 | Q7 | High | 60 | tests | No test coverage for config parsing error paths | `src/config.zig`, `tests/` | Zero test files reference `loadConfig`, `parseConfig`, `ConfigNotFound`, `InvalidJson`, or `MissingVersion`; 24 panic-prone unwrap sites are untested | GAP-018 | 8 inline tests added covering all error paths | @benjiv | M | **resolved** |
 | 8 | Q8 | Medium | 48 | maintainability | nowRfc3339Impl duplicated between SystemClock and FixedClock | `src/time.zig` | Lines 38-58 (SystemClock) and 82-103 (FixedClock) contain identical date-formatting logic differing only in timestamp source | -- | Extract a shared `formatTimestamp(ts: i128, buf: []u8) []const u8` helper | TBD | S | triage |
 | 9 | Q9 | Medium | 48 | maintainability | formatRfc5424 logic duplicated between SyslogSender and MockSyslogSender | `src/syslog.zig` | SyslogSender.formatRfc5424 (lines 136-152) and MockSyslogSender.send (lines 294-312) contain identical RFC 5424 formatting | -- | Extract a standalone `formatRfc5424` function; call from both types | TBD | S | triage |
 | 10 | Q11 | Medium | 48 | api-contract | requestIdImpl returns "" on OOM instead of error | `src/time.zig` | Line 163: `catch ""` on `allocPrint`; line 201: `catch ""` on `allocator.dupe`; callers cannot distinguish OOM from a legitimate empty ID | -- | Change `requestId` vtable signature to return `![]const u8`; propagate errors | TBD | S | triage |
-| 11 | Q10 | Medium | 36 | readability | escapeCefString has redundant = handling in both branches | `src/cef.zig` | Line 172: `'=' => if (is_header) try result.appendSlice(allocator, "\\=") else try result.appendSlice(allocator, "\\=")` -- both branches do the same thing | -- | Remove the conditional; always escape `=` | TBD | S | triage |
+| 11 | Q10 | Medium | 36 | readability | escapeCefString has redundant = handling in both branches | `src/cef.zig` | Line 172: `'=' => if (is_header) try result.appendSlice(allocator, "\\=") else try result.appendSlice(allocator, "\\=")` -- both branches do the same thing | GAP-006 | Fixed during CEF escape rewrite: = only escaped in extensions per spec | @benjiv | S | **resolved** |
 | 12 | Q13 | Medium | 36 | perf | truncateEvent result allocated and immediately freed | `src/logger.zig` | Lines 123-124: `const truncated = try self.truncateEvent(&event); defer self.allocator.free(truncated);` -- the returned string is never read; only the side-effect metadata replacement matters | -- | Remove the `truncateEvent` call; build truncation metadata directly | TBD | S | triage |
-| 13 | Q12 | Medium | 24 | cleanup | Dead AuditEvent.init() and deinit() methods | `src/events.zig` | Lines 62-85: `init` takes an allocator it ignores; `deinit` is never called (callers use `freeCloned`); zero references in codebase | -- | Remove both methods; callers use struct literals and `freeCloned` | TBD | S | triage |
+| 13 | Q12 | Medium | 24 | cleanup | Dead AuditEvent.init() and deinit() methods | `src/events.zig` | Lines 62-85: `init` takes an allocator it ignores; `deinit` is never called (callers use `freeCloned`); zero references in codebase | GAP-026 | Dead AuditEvent.init removed | @benjiv | S | **resolved** |
 | 14 | Q14 | Medium | 24 | docs | 8 of 9 source files lack module-level doc comments | `src/cef.zig`, `src/config.zig`, `src/events.zig`, `src/file_sink.zig`, `src/filters.zig`, `src/logger.zig`, `src/syslog.zig`, `src/time.zig` | Only `src/root.zig` has `//!` module-level documentation; all other modules start with license header only | -- | Add `//!` doc comments to each module describing purpose and public API | TBD | M | triage |
 | 15 | Q15 | Medium | 20 | readability | Missing explanatory comments on non-obvious filter logic | `src/filters.zig` | Line 299: `isPemPrivateKey(str_value) and !std.mem.startsWith(u8, str_value, "-----BEGIN")` -- the negated condition is counter-intuitive with no comment explaining why both checks exist | -- | Add comment explaining this detects embedded private keys (not standalone PEM blocks) | TBD | S | triage |
 | 16 | Q16 | Low | 16 | architecture | syslog.zig is 424 LOC with 3 types | `src/syslog.zig` | Contains `SyslogSender` (272 LOC), `MockSyslogSender` (60 LOC), and `RingBuffer` (55 LOC) in a single file | -- | Extract `RingBuffer` to `ring_buffer.zig`; optionally move `MockSyslogSender` to test support | TBD | S | triage |
 | 17 | Q17 | Low | 16 | readability | formatJsonLine 65 lines of repetitive insertion | `src/file_sink.zig` | Lines 122-187: each field insertion is ~3 lines of allocator.dupe + json_obj.put with identical pattern repeated 12 times | -- | Extract a helper `putStringField(obj, allocator, key, value)` to reduce repetition | TBD | S | triage |
-| 18 | Q18 | Low | 12 | cleanup | Dead TLS pool management code | `src/syslog.zig` | Lines 238-271: `releasePooledConnection` and `verifyCertificatePin` are never called; TLS transport returns `error.TlsNotImplemented` | -- | Remove until TLS transport is implemented; document in GAP-005 | TBD | S | triage |
-| 19 | Q19 | Low | 12 | cleanup | Dead IdGen.requestId vtable method | `src/time.zig` | Lines 112, 123-125: `requestId` is defined on the `IdGen` vtable and dispatched but never called by any consumer (logger only uses `traceId`/`spanId`) | -- | Remove from vtable; re-add when a consumer needs it | TBD | S | triage |
+| 18 | Q18 | Low | 12 | cleanup | Dead TLS pool management code | `src/syslog.zig` | Lines 238-271: `releasePooledConnection` and `verifyCertificatePin` are never called; TLS transport returns `error.TlsNotImplemented` | GAP-026/027 | Dead functions and TLS pool fields removed | @benjiv | S | **resolved** |
+| 19 | Q19 | Low | 12 | cleanup | Dead IdGen.requestId vtable method | `src/time.zig` | Lines 112, 123-125: `requestId` is defined on the `IdGen` vtable and dispatched but never called by any consumer (logger only uses `traceId`/`spanId`) | GAP-026 | Dead code removed | @benjiv | S | **resolved** |
 | 20 | Q20 | Low | 8 | cleanup | ErrorLogJson struct used only for default values | `src/file_sink.zig` | Lines 69-77: struct defined, instantiated, but only its fields are read to populate a manual `ObjectMap`; the struct is not serialized | -- | Inline the string constants directly into the ObjectMap puts | TBD | S | triage |
-| 21 | Q21 | Low | 8 | docs | Placeholder example not wired into build | `examples/basic.zig` | 24-line file prints "Example completed successfully!" with commented-out audit usage; not referenced in `build.zig` | -- | Implement a working example using the real API; wire into build as an example step | TBD | M | triage |
+| 21 | Q21 | Low | 8 | docs | Placeholder example not wired into build | `examples/basic.zig` | 24-line file prints "Example completed successfully!" with commented-out audit usage; not referenced in `build.zig` | GAP-028 | Working example wired into build.zig | @benjiv | M | **resolved** |
 
 ---
 
