@@ -8,10 +8,10 @@ const std = @import("std");
 const config = @import("config.zig");
 const json_util = @import("json_util.zig");
 
-pub const FilterResult = enum {
-    allow,
-    redact,
-    drop_event,
+pub const FilterResult = union(enum) {
+    allow: void,
+    redact: ?RedactionToken, // token from isSensitiveKey; null for deny-pattern or value-only match
+    drop_event: void,
 };
 
 pub const RedactionToken = enum {
@@ -43,8 +43,13 @@ pub const RedactionToken = enum {
 };
 
 pub fn isSensitiveKey(allocator: std.mem.Allocator, key: []const u8) ?RedactionToken {
-    const lower_key = std.ascii.allocLowerString(allocator, key) catch return null;
-    defer allocator.free(lower_key);
+    _ = allocator; // no longer needed; lowercase conversion uses stack buffer
+    var buf: [256]u8 = undefined;
+    if (key.len > buf.len) return null; // oversized keys are not sensitive
+    const lower_key = buf[0..key.len];
+    for (key, 0..) |c, i| {
+        lower_key[i] = std.ascii.toLower(c);
+    }
 
     // Password-related
     if (std.mem.indexOf(u8, lower_key, "password") != null or
@@ -326,8 +331,10 @@ fn filterAndRedactMetadataRecursive(
                         const processed_value = try redactValueRecursive(allocator, value, filters_cfg, depth + 1);
                         try filtered_map.put(try allocator.dupe(u8, key), processed_value);
                     },
-                    .redact => {
-                        // Determine the redacted string, applying masking when pii_mode == .mask
+                    .redact => |key_token| {
+                        // Determine the redacted string, applying masking when pii_mode == .mask.
+                        // key_token is the pre-resolved isSensitiveKey result from shouldFilterField,
+                        // avoiding a redundant second call.
                         const redacted_str = redact_blk: {
                             // First check if the value itself is a detectable type
                             if (value == .string) {
@@ -335,18 +342,18 @@ fn filterAndRedactMetadataRecursive(
                                     break :redact_blk try redactOrMaskValue(allocator, value.string, detected, filters_cfg);
                                 }
                             }
-                            // Fall back to key-based redaction token
-                            if (isSensitiveKey(allocator, key)) |key_token| {
+                            // Fall back to key-based redaction token (already resolved)
+                            if (key_token) |kt| {
                                 // For key-based PII redaction with masking, check value
                                 if (filters_cfg.pii_mode == .mask and value == .string) {
-                                    if (key_token == .email and isEmail(value.string)) {
+                                    if (kt == .email and isEmail(value.string)) {
                                         break :redact_blk try maskEmail(allocator, value.string);
                                     }
-                                    if (key_token == .phone and isPhone(value.string)) {
+                                    if (kt == .phone and isPhone(value.string)) {
                                         break :redact_blk try maskPhone(allocator, value.string);
                                     }
                                 }
-                                break :redact_blk try allocator.dupe(u8, key_token.toString());
+                                break :redact_blk try allocator.dupe(u8, kt.toString());
                             }
                             break :redact_blk try allocator.dupe(u8, "[REDACTED]");
                         };
@@ -449,7 +456,7 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
     if (filters.pci_mode and value == .string) {
         const detected = detectValueType(value.string);
         if (detected == .card or detected == .cvv) {
-            return .redact;
+            return .{ .redact = sensitive_token };
         }
     }
 
@@ -463,17 +470,17 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
                 return .drop_event;
             }
         }
-        return .redact;
+        return .{ .redact = sensitive_token };
     }
 
     if (filters.default_deny and !is_allowed) {
-        return .redact;
+        return .{ .redact = sensitive_token };
     }
 
     if (value == .string) {
         const detected_type = detectValueTypeFiltered(value.string, filters);
         if (detected_type != null) {
-            return .redact;
+            return .{ .redact = sensitive_token };
         }
     }
 

@@ -107,27 +107,47 @@ pub const AuditEvent = struct {
     }
 
     pub fn clone(self: *const AuditEvent, allocator: std.mem.Allocator) !AuditEvent {
-        var cloned = AuditEvent{
-            .category = try allocator.dupe(u8, self.category),
-            .action = try allocator.dupe(u8, self.action),
+        const cat = try allocator.dupe(u8, self.category);
+        errdefer allocator.free(cat);
+
+        const act = try allocator.dupe(u8, self.action);
+        errdefer allocator.free(act);
+
+        const aid = try allocator.dupe(u8, self.actor_id);
+        errdefer allocator.free(aid);
+
+        const sid = if (self.subject_id) |s| try allocator.dupe(u8, s) else null;
+        errdefer if (sid) |s| allocator.free(s);
+
+        const rid = if (self.request_id) |r| try allocator.dupe(u8, r) else null;
+        errdefer if (rid) |r| allocator.free(r);
+
+        const ses = if (self.session_id) |s| try allocator.dupe(u8, s) else null;
+        errdefer if (ses) |s| allocator.free(s);
+
+        const sip = if (self.source_ip) |s| try allocator.dupe(u8, s) else null;
+        errdefer if (sip) |s| allocator.free(s);
+
+        var cloned_metadata: ?std.json.Value = null;
+        if (self.metadata) |metadata| {
+            cloned_metadata = try json_util.cloneJsonValue(allocator, metadata);
+        }
+
+        return AuditEvent{
+            .category = cat,
+            .action = act,
             .outcome = self.outcome,
             .ts_unix_ms = self.ts_unix_ms,
             .severity = self.severity,
-            .actor_id = try allocator.dupe(u8, self.actor_id),
-            .subject_id = if (self.subject_id) |sid| try allocator.dupe(u8, sid) else null,
-            .request_id = if (self.request_id) |rid| try allocator.dupe(u8, rid) else null,
-            .session_id = if (self.session_id) |sid| try allocator.dupe(u8, sid) else null,
-            .source_ip = if (self.source_ip) |sip| try allocator.dupe(u8, sip) else null,
+            .actor_id = aid,
+            .subject_id = sid,
+            .request_id = rid,
+            .session_id = ses,
+            .source_ip = sip,
             .trace_id = self.trace_id,
             .span_id = self.span_id,
-            .metadata = null,
+            .metadata = cloned_metadata,
         };
-
-        if (self.metadata) |metadata| {
-            cloned.metadata = try json_util.cloneJsonValue(allocator, metadata);
-        }
-
-        return cloned;
     }
 
     pub fn freeCloned(self: *AuditEvent, allocator: std.mem.Allocator) void {

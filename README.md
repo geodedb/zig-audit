@@ -73,6 +73,70 @@ pub fn main() !void {
 }
 ```
 
+## CEF Identity Configuration
+
+Audit events are formatted using the Common Event Format (CEF). The CEF header
+includes vendor, product, and version fields that identify the source of audit
+records. Configure these via the `identity.cef` section of your JSON config
+file:
+
+```json
+{
+  "identity": {
+    "cef": {
+      "vendor": "YourCompany",
+      "product": "YourProduct",
+      "version": "2.1.0"
+    }
+  }
+}
+```
+
+These values appear in every CEF-formatted syslog message as:
+
+```
+CEF:0|YourCompany|YourProduct|2.1.0|...
+```
+
+When using `loadTestConfig`, the defaults are `DEVNW`, `AUDIT`, and the
+library version (`0.1.0`).
+
+## What's NOT in This Library
+
+This library provides the core, reusable audit infrastructure: event modeling,
+metadata filtering/redaction, CEF formatting, file and syslog sinks, and logger
+orchestration.
+
+The following remain in [Geode](https://gitlab.com/devnw/geode) and are **not**
+included here:
+
+- **Database adapters** (`db_adapter.zig`) -- Geode-specific persistence layer
+- **Geode-specific schemas** -- application-level audit record definitions
+- **Legacy security audit stack** (`src/security/audit*.zig`) -- to be
+  reconciled toward this library in a future release
+
+See [docs/GAP_ANALYSIS.md](docs/GAP_ANALYSIS.md) for the full extraction
+boundary and remaining open items.
+
+## Security Considerations
+
+**Syslog destination: prefer IP addresses over hostnames.** In high-security
+environments, configure syslog destinations using IP addresses (e.g.,
+`"host": "10.0.0.50"`) rather than hostnames. This eliminates the risk of DNS
+spoofing attacks redirecting audit logs to an attacker-controlled server. If
+hostnames are required, ensure DNSSEC validation is enabled on the resolver or
+use a trusted internal DNS infrastructure.
+
+**Transport encryption.** The syslog sink supports UDP and TCP transports. TLS
+transport is not yet available natively (see GAP-005 in the gap analysis).
+For encrypted syslog transport, use an external TLS tunnel such as
+[stunnel](https://www.stunnel.org/) between the application and the syslog
+collector.
+
+**File sink permissions.** The file sink sets log files to mode `0640` on
+Unix systems, restricting read access to the owner and group. Ensure the
+audit log directory has appropriate ownership and permissions.
+
 ## Requirements
 
 - Zig 0.15.1 or later

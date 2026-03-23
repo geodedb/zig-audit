@@ -91,6 +91,16 @@ pub const FileSink = struct {
         }
     }
 
+    /// Insert a string field into a JSON object, duplicating both the key and value.
+    /// This reduces repetition in formatJsonLine where every field follows the
+    /// same `try obj.put(try dupe(key), .{ .string = try dupe(value) })` pattern.
+    fn putField(self: *FileSink, obj: *std.json.ObjectMap, key: []const u8, value: []const u8) !void {
+        try obj.put(
+            try self.allocator.dupe(u8, key),
+            std.json.Value{ .string = try self.allocator.dupe(u8, value) },
+        );
+    }
+
     fn formatJsonLine(self: *FileSink, event: *const events.AuditEvent, filtered_metadata: ?std.json.Value) ![]const u8 {
         var json_obj = std.json.ObjectMap.init(self.allocator);
         defer {
@@ -104,38 +114,36 @@ pub const FileSink = struct {
 
         var ts_buf: [64]u8 = undefined;
         const timestamp = self.clock.nowRfc3339(&ts_buf);
-        try json_obj.put(try self.allocator.dupe(u8, "ts"), std.json.Value{ .string = try self.allocator.dupe(u8, timestamp) });
+        try self.putField(&json_obj, "ts", timestamp);
 
-        try json_obj.put(try self.allocator.dupe(u8, "category"), std.json.Value{ .string = try self.allocator.dupe(u8, event.category) });
-        try json_obj.put(try self.allocator.dupe(u8, "action"), std.json.Value{ .string = try self.allocator.dupe(u8, event.action) });
-        try json_obj.put(try self.allocator.dupe(u8, "outcome"), std.json.Value{ .string = try self.allocator.dupe(u8, event.outcome.toString()) });
-        try json_obj.put(try self.allocator.dupe(u8, "severity"), std.json.Value{ .string = try self.allocator.dupe(u8, @tagName(event.severity)) });
-        try json_obj.put(try self.allocator.dupe(u8, "actor_id"), std.json.Value{ .string = try self.allocator.dupe(u8, event.actor_id) });
+        try self.putField(&json_obj, "category", event.category);
+        try self.putField(&json_obj, "action", event.action);
+        try self.putField(&json_obj, "outcome", event.outcome.toString());
+        try self.putField(&json_obj, "severity", @tagName(event.severity));
+        try self.putField(&json_obj, "actor_id", event.actor_id);
 
         if (event.subject_id) |subject_id| {
-            try json_obj.put(try self.allocator.dupe(u8, "subject_id"), std.json.Value{ .string = try self.allocator.dupe(u8, subject_id) });
+            try self.putField(&json_obj, "subject_id", subject_id);
         }
 
         if (event.request_id) |request_id| {
-            try json_obj.put(try self.allocator.dupe(u8, "request_id"), std.json.Value{ .string = try self.allocator.dupe(u8, request_id) });
+            try self.putField(&json_obj, "request_id", request_id);
         }
 
         if (event.session_id) |session_id| {
-            try json_obj.put(try self.allocator.dupe(u8, "session_id"), std.json.Value{ .string = try self.allocator.dupe(u8, session_id) });
+            try self.putField(&json_obj, "session_id", session_id);
         }
 
         if (event.source_ip) |source_ip| {
-            try json_obj.put(try self.allocator.dupe(u8, "source_ip"), std.json.Value{ .string = try self.allocator.dupe(u8, source_ip) });
+            try self.putField(&json_obj, "source_ip", source_ip);
         }
 
         if (event.trace_id) |trace_id| {
-            const trace_str = try self.allocator.dupe(u8, &trace_id);
-            try json_obj.put(try self.allocator.dupe(u8, "trace_id"), std.json.Value{ .string = trace_str });
+            try self.putField(&json_obj, "trace_id", &trace_id);
         }
 
         if (event.span_id) |span_id| {
-            const span_str = try self.allocator.dupe(u8, &span_id);
-            try json_obj.put(try self.allocator.dupe(u8, "span_id"), std.json.Value{ .string = span_str });
+            try self.putField(&json_obj, "span_id", &span_id);
         }
 
         if (filtered_metadata) |metadata| {

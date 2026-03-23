@@ -196,6 +196,11 @@ pub const SyslogSender = struct {
         const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
         defer std.posix.close(socket);
 
+        // Set a 5-second send timeout to avoid blocking indefinitely on
+        // unresponsive peers.
+        const timeout = std.posix.timeval{ .sec = 5, .usec = 0 };
+        std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch {};
+
         const addr = try resolveHostToAddress(self.allocator, self.config.host, self.config.port);
         try std.posix.connect(socket, &addr.any, addr.getOsSockLen());
 

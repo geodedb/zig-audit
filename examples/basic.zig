@@ -38,6 +38,30 @@ pub fn main() !void {
     var cfg = try audit.config.loadTestConfig(allocator);
 
     //    Disable syslog for this example (no real syslog server available).
+    //
+    //    To enable syslog in production, configure the syslog sink in your
+    //    JSON config file (or set these fields programmatically):
+    //
+    //      cfg.sinks.syslog.enabled  = true;
+    //      cfg.sinks.syslog.protocol = .udp;   // .udp, .tcp, or .tls
+    //      cfg.sinks.syslog.host     = "10.0.0.50";  // prefer IP over hostname
+    //      cfg.sinks.syslog.port     = 514;
+    //      cfg.sinks.syslog.rfc5424.facility = .local4;
+    //
+    //    Or via JSON config:
+    //
+    //      "sinks": {
+    //        "syslog": {
+    //          "enabled": true,
+    //          "protocol": "udp",
+    //          "host": "10.0.0.50",
+    //          "port": 514,
+    //          "rfc5424": { "facility": "local4" }
+    //        }
+    //      }
+    //
+    //    See README.md "Security Considerations" for notes on using IP
+    //    addresses vs hostnames in high-security environments.
     cfg.sinks.syslog.enabled = false;
 
     //    Point the file sink at a temporary path so the example is self-contained.
