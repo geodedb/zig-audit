@@ -69,6 +69,7 @@ pub const AuditLogger = struct {
     }
 
     pub fn audit(self: *AuditLogger, ev: *const events.AuditEvent) !void {
+        try ev.validate();
         var event = try ev.clone(self.allocator);
         defer event.freeCloned(self.allocator);
 
@@ -121,9 +122,6 @@ pub const AuditLogger = struct {
         defer self.allocator.free(test_json);
 
         if (test_json.len > 8192) {
-            const truncated = try self.truncateEvent(&event);
-            defer self.allocator.free(truncated);
-
             if (event.metadata) |metadata| {
                 json_util.freeJsonValue(self.allocator, metadata);
             }
@@ -157,22 +155,6 @@ pub const AuditLogger = struct {
 
         const value = std.json.Value{ .object = obj };
         return std.json.Stringify.valueAlloc(self.allocator, value, .{});
-    }
-
-    fn truncateEvent(self: *AuditLogger, event: *const events.AuditEvent) ![]const u8 {
-        // Use std.json for type-safe struct serialization instead of external json library
-        const TruncatedEventJson = struct {
-            category: []const u8,
-            action: []const u8,
-            actor_id: []const u8,
-            _msg: []const u8 = "...[TRUNCATED]",
-        };
-        const truncated = TruncatedEventJson{
-            .category = event.category,
-            .action = event.action,
-            .actor_id = event.actor_id,
-        };
-        return std.json.Stringify.valueAlloc(self.allocator, truncated, .{});
     }
 
 };

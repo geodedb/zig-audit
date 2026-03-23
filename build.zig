@@ -102,6 +102,25 @@ pub fn build(b: *std.Build) void {
     all_test_step.dependOn(&b.addRunArtifact(filter_tests).step);
     all_test_step.dependOn(&b.addRunArtifact(transport_tests).step);
 
+    // Example: basic usage (compile check + runnable)
+    const example_step = b.step("example", "Build and run the basic example");
+    const example = b.addExecutable(.{
+        .name = "basic-example",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/basic.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "audit", .module = module },
+            },
+        }),
+    });
+    const run_example = b.addRunArtifact(example);
+    example_step.dependOn(&run_example.step);
+
+    // Compile-check the example as part of test-all so CI catches breakage
+    all_test_step.dependOn(&example.step);
+
     // Check step for IDE integration (fast syntax validation)
     const check_step = b.step("check", "Check for compilation errors");
     const check = b.addTest(.{

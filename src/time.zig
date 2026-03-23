@@ -21,6 +21,29 @@ pub const Clock = struct {
     }
 };
 
+/// Format a millisecond-precision UTC timestamp as an RFC 3339 string.
+/// Shared implementation used by both SystemClock and FixedClock.
+pub fn formatRfc3339(ts_ms: i128, buf: []u8) []const u8 {
+    const seconds = @divTrunc(ts_ms, 1000);
+    const millis = @mod(ts_ms, 1000);
+    const millis_u32: u32 = @intCast(@as(i64, @intCast(millis)));
+
+    const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
+    const day_seconds = epoch_seconds.getDaySeconds();
+    const year_day = epoch_seconds.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+
+    return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
+        year_day.year,
+        @intFromEnum(month_day.month),
+        month_day.day_index + 1,
+        day_seconds.getHoursIntoDay(),
+        day_seconds.getMinutesIntoHour(),
+        day_seconds.getSecondsIntoMinute(),
+        millis_u32,
+    }) catch "";
+}
+
 pub const SystemClock = struct {
     const vtable = Clock.VTable{
         .nowMs = nowMsImpl,
@@ -36,25 +59,7 @@ pub const SystemClock = struct {
     }
 
     fn nowRfc3339Impl(_: *anyopaque, buf: []u8) []const u8 {
-        const ts = std.time.milliTimestamp();
-        const seconds = @divTrunc(ts, 1000);
-        const millis = @mod(ts, 1000);
-        const millis_u32: u32 = @intCast(@as(i64, @intCast(millis)));
-
-        const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
-        const day_seconds = epoch_seconds.getDaySeconds();
-        const year_day = epoch_seconds.getEpochDay().calculateYearDay();
-        const month_day = year_day.calculateMonthDay();
-
-        return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
-            year_day.year,
-            @intFromEnum(month_day.month),
-            month_day.day_index + 1,
-            day_seconds.getHoursIntoDay(),
-            day_seconds.getMinutesIntoHour(),
-            day_seconds.getSecondsIntoMinute(),
-            millis_u32,
-        }) catch "";
+        return formatRfc3339(std.time.milliTimestamp(), buf);
     }
 };
 
@@ -81,25 +86,7 @@ pub const FixedClock = struct {
 
     fn nowRfc3339Impl(context: *anyopaque, buf: []u8) []const u8 {
         const self: *FixedClock = @ptrCast(@alignCast(context));
-        const ts = self.fixed_time_ms;
-        const seconds = @divTrunc(ts, 1000);
-        const millis = @mod(ts, 1000);
-        const millis_u32: u32 = @intCast(@as(i64, @intCast(millis)));
-
-        const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
-        const day_seconds = epoch_seconds.getDaySeconds();
-        const year_day = epoch_seconds.getEpochDay().calculateYearDay();
-        const month_day = year_day.calculateMonthDay();
-
-        return std.fmt.bufPrint(buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
-            year_day.year,
-            @intFromEnum(month_day.month),
-            month_day.day_index + 1,
-            day_seconds.getHoursIntoDay(),
-            day_seconds.getMinutesIntoHour(),
-            day_seconds.getSecondsIntoMinute(),
-            millis_u32,
-        }) catch "";
+        return formatRfc3339(self.fixed_time_ms, buf);
     }
 };
 
@@ -288,4 +275,31 @@ test "SystemIdGen produces different trace IDs on consecutive calls" {
 
     // Two consecutive calls should produce different IDs
     try std.testing.expect(!std.mem.eql(u8, &buf1, &buf2));
+}
+
+test "formatRfc3339 formats known timestamp correctly" {
+    var buf: [64]u8 = undefined;
+    // TEST_TIMESTAMP_MS = 1735689600000 = 2025-01-01T00:00:00.000Z
+    const result = formatRfc3339(TEST_TIMESTAMP_MS, &buf);
+    try std.testing.expectEqualStrings("2025-01-01T00:00:00.000Z", result);
+}
+
+test "formatRfc3339 preserves sub-second precision" {
+    var buf: [64]u8 = undefined;
+    // 2025-01-01T00:00:01.456Z
+    const result = formatRfc3339(TEST_TIMESTAMP_MS + 1456, &buf);
+    try std.testing.expectEqualStrings("2025-01-01T00:00:01.456Z", result);
+}
+
+test "formatRfc3339 agrees with FixedClock output" {
+    var buf_shared: [64]u8 = undefined;
+    var buf_clock: [64]u8 = undefined;
+
+    const shared_result = formatRfc3339(TEST_TIMESTAMP_MS, &buf_shared);
+
+    var fixed_clock = FixedClock.init(TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+    const clock_result = clock.nowRfc3339(&buf_clock);
+
+    try std.testing.expectEqualStrings(shared_result, clock_result);
 }

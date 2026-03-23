@@ -14,7 +14,6 @@ const log = std.log.scoped(.audit);
 const dns = @import("dns");
 
 const QUEUE_SIZE = 10000;
-const MAX_POOL_SIZE = 16;
 
 /// Resolve a hostname to an IPv4 address using the external DNS library.
 /// Falls back to std.net.Address.parseIp4 if the host is already an IP address.
@@ -40,12 +39,6 @@ fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u1
     }
 }
 
-const PooledConnection = struct {
-    socket: std.posix.socket_t,
-    last_used: i64,
-    in_use: bool,
-};
-
 pub const SyslogSender = struct {
     allocator: std.mem.Allocator,
     config: config.SyslogSinkConfig,
@@ -56,8 +49,6 @@ pub const SyslogSender = struct {
     mutex: std.Thread.Mutex,
     should_stop: std.atomic.Value(bool),
     thread: ?std.Thread,
-    tls_pool: [MAX_POOL_SIZE]?PooledConnection,
-    pool_mutex: std.Thread.Mutex,
     dropped_count: u64,
 
     pub fn init(
@@ -68,10 +59,6 @@ pub const SyslogSender = struct {
         clock: time.Clock,
     ) !*SyslogSender {
         const sender = try allocator.create(SyslogSender);
-        var tls_pool: [MAX_POOL_SIZE]?PooledConnection = undefined;
-        for (&tls_pool) |*slot| {
-            slot.* = null;
-        }
 
         sender.* = SyslogSender{
             .allocator = allocator,
@@ -83,8 +70,6 @@ pub const SyslogSender = struct {
             .mutex = std.Thread.Mutex{},
             .should_stop = std.atomic.Value(bool).init(false),
             .thread = null,
-            .tls_pool = tls_pool,
-            .pool_mutex = std.Thread.Mutex{},
             .dropped_count = 0,
         };
 
@@ -95,6 +80,7 @@ pub const SyslogSender = struct {
         }
 
         if (sender.config.enabled) {
+            log.warn("syslog transport using plaintext {s}; use TLS tunnel for encrypted transport", .{@tagName(syslog_config.protocol)});
             sender.thread = try std.Thread.spawn(.{}, workerThread, .{sender});
         }
 
@@ -106,15 +92,6 @@ pub const SyslogSender = struct {
             self.should_stop.store(true, .seq_cst);
             thread.join();
         }
-
-        self.pool_mutex.lock();
-        for (&self.tls_pool) |*slot| {
-            if (slot.*) |conn_val| {
-                std.posix.close(conn_val.socket);
-                slot.* = null;
-            }
-        }
-        self.pool_mutex.unlock();
 
         while (self.queue.pop()) |msg| {
             self.allocator.free(msg);
@@ -253,40 +230,6 @@ pub const SyslogSender = struct {
         return error.TlsNotImplemented;
     }
 
-    fn releasePooledConnection(self: *SyslogSender, index: ?usize, close_on_error: bool) void {
-        if (index) |idx| {
-            self.pool_mutex.lock();
-            defer self.pool_mutex.unlock();
-
-            if (self.tls_pool[idx]) |*conn| {
-                if (close_on_error) {
-                    std.posix.close(conn.socket);
-                    self.tls_pool[idx] = null;
-                } else {
-                    conn.in_use = false;
-                    conn.last_used = @as(i64, @intCast(self.clock.nowMs()));
-                }
-            }
-        }
-    }
-
-    fn verifyCertificatePin(expected_hash: []const u8) bool {
-        if (expected_hash.len != 64) {
-            log.err("invalid pinned certificate hash length: expected 64, got {d}", .{expected_hash.len});
-            return false;
-        }
-
-        for (expected_hash) |c| {
-            const valid = (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
-            if (!valid) {
-                log.err("invalid hex character in pinned certificate hash", .{});
-                return false;
-            }
-        }
-
-        log.warn("certificate pinning configured but full verification requires TLS library extension", .{});
-        return true;
-    }
 };
 
 pub const MockSyslogSender = struct {
