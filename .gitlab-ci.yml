@@ -51,14 +51,14 @@ build:
       - zig-out/
     expire_in: 1 hour
 
-# Unit tests
+# All tests (unit + integration + CEF + filters + transports)
 test:
   stage: test
   image: debian:bookworm-slim
   before_script:
     - *install-zig
   script:
-    - zig build test --summary all
+    - zig build test-all --summary all
   needs:
     - build
 

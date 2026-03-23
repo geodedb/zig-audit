@@ -44,6 +44,7 @@ pub const syslog = @import("syslog.zig");
 pub const file_sink = @import("file_sink.zig");
 pub const time = @import("time.zig");
 pub const cef = @import("cef.zig");
+pub const json_util = @import("json_util.zig");
 pub const logger = @import("logger.zig");
 
 // ── Convenience re-exports ──────────────────────────────────────────────

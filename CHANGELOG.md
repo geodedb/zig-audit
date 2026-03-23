@@ -7,21 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Initial project structure
-- Core library implementation
-- Unit and integration tests
-- CI/CD pipeline
-- Documentation
-
-## [0.1.0] - YYYY-MM-DD
+## [0.1.0] - 2026-03-22
 
 ### Added
 
-- Initial release
-- Basic functionality
-- Documentation and examples
+- Audit event modeling with structured `AuditEvent` type
+- CEF (Common Event Format) formatting for syslog output
+- Syslog sink with RFC 5424 framing over UDP and TCP transports
+- File sink with JSON-line output and size-based log rotation
+- Metadata filtering with default-deny allow-list and deny-key patterns
+- PII redaction (mask/hash modes) and PCI-DSS PAN detection
+- JWT, private-key, and bearer-token redaction in metadata
+- Logger orchestration combining file and syslog sinks
+- Deterministic Clock and IdGen interfaces for testing
+- DNS-based hostname resolution via external dns library
 
 [Unreleased]: https://gitlab.com/devnw/zig/audit/-/compare/v0.1.0...HEAD
 [0.1.0]: https://gitlab.com/devnw/zig/audit/-/releases/v0.1.0

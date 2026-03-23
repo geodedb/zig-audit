@@ -5,6 +5,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const events = @import("events.zig");
 const config = @import("config.zig");
+const json_util = @import("json_util.zig");
 const time = @import("time.zig");
 
 pub const FileSink = struct {
@@ -96,36 +97,13 @@ pub const FileSink = struct {
         }
     }
 
-    fn freeJsonValue(self: *FileSink, value: std.json.Value) void {
-        var val = value;
-        switch (val) {
-            .number_string => |ns| self.allocator.free(ns),
-            .string => |s| self.allocator.free(s),
-            .array => |*arr| {
-                for (arr.items) |item| {
-                    self.freeJsonValue(item);
-                }
-                arr.deinit();
-            },
-            .object => |*obj| {
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    self.allocator.free(entry.key_ptr.*);
-                    self.freeJsonValue(entry.value_ptr.*);
-                }
-                obj.deinit();
-            },
-            else => {},
-        }
-    }
-
     fn formatJsonLine(self: *FileSink, event: *const events.AuditEvent, filtered_metadata: ?std.json.Value) ![]const u8 {
         var json_obj = std.json.ObjectMap.init(self.allocator);
         defer {
             var iter = json_obj.iterator();
             while (iter.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
-                self.freeJsonValue(entry.value_ptr.*);
+                json_util.freeJsonValue(self.allocator,entry.value_ptr.*);
             }
             json_obj.deinit();
         }
@@ -173,10 +151,10 @@ pub const FileSink = struct {
                     // Free any existing entry with the same key to avoid leaks
                     if (json_obj.fetchSwapRemove(entry.key_ptr.*)) |removed| {
                         self.allocator.free(removed.key);
-                        self.freeJsonValue(removed.value);
+                        json_util.freeJsonValue(self.allocator,removed.value);
                     }
                     const key = try self.allocator.dupe(u8, entry.key_ptr.*);
-                    const value = try self.cloneJsonValue(entry.value_ptr.*);
+                    const value = try json_util.cloneJsonValue(self.allocator,entry.value_ptr.*);
                     try json_obj.put(key, value);
                 }
             }
@@ -184,34 +162,6 @@ pub const FileSink = struct {
 
         const json_value = std.json.Value{ .object = json_obj };
         return std.json.Stringify.valueAlloc(self.allocator, json_value, .{});
-    }
-
-    fn cloneJsonValue(self: *FileSink, value: std.json.Value) !std.json.Value {
-        return switch (value) {
-            .null => .null,
-            .bool => |b| std.json.Value{ .bool = b },
-            .integer => |i| std.json.Value{ .integer = i },
-            .float => |f| std.json.Value{ .float = f },
-            .number_string => |ns| std.json.Value{ .number_string = try self.allocator.dupe(u8, ns) },
-            .string => |s| std.json.Value{ .string = try self.allocator.dupe(u8, s) },
-            .array => |arr| blk: {
-                var cloned_array = std.json.Array.init(self.allocator);
-                for (arr.items) |item| {
-                    try cloned_array.append(try self.cloneJsonValue(item));
-                }
-                break :blk std.json.Value{ .array = cloned_array };
-            },
-            .object => |obj| blk: {
-                var cloned_map = std.json.ObjectMap.init(self.allocator);
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    const cloned_key = try self.allocator.dupe(u8, entry.key_ptr.*);
-                    const cloned_value = try self.cloneJsonValue(entry.value_ptr.*);
-                    try cloned_map.put(cloned_key, cloned_value);
-                }
-                break :blk std.json.Value{ .object = cloned_map };
-            },
-        };
     }
 
     fn checkRotation(self: *FileSink, additional_size: usize) !void {

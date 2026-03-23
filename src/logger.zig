@@ -5,6 +5,7 @@ const std = @import("std");
 const events = @import("events.zig");
 const config = @import("config.zig");
 const filters = @import("filters.zig");
+const json_util = @import("json_util.zig");
 const syslog = @import("syslog.zig");
 const file_sink = @import("file_sink.zig");
 const time = @import("time.zig");
@@ -94,7 +95,7 @@ pub const AuditLogger = struct {
             null;
 
         defer if (filtered_metadata) |fm| {
-            freeJsonValue(self.allocator, fm);
+            json_util.freeJsonValue(self.allocator, fm);
         };
 
         // If filtering resulted in dropping the event, log error and return
@@ -107,10 +108,10 @@ pub const AuditLogger = struct {
 
         // Update event with filtered metadata
         if (event.metadata) |original_metadata| {
-            freeJsonValue(self.allocator, original_metadata);
+            json_util.freeJsonValue(self.allocator, original_metadata);
         }
         if (filtered_metadata) |fm| {
-            event.metadata = try self.cloneJsonValue(fm);
+            event.metadata = try json_util.cloneJsonValue(self.allocator, fm);
         } else {
             event.metadata = null;
         }
@@ -124,7 +125,7 @@ pub const AuditLogger = struct {
             defer self.allocator.free(truncated);
 
             if (event.metadata) |metadata| {
-                freeJsonValue(self.allocator, metadata);
+                json_util.freeJsonValue(self.allocator, metadata);
             }
             var truncation_obj = std.json.ObjectMap.init(self.allocator);
             try truncation_obj.put("_truncated", std.json.Value{ .bool = true });
@@ -174,56 +175,6 @@ pub const AuditLogger = struct {
         return std.json.Stringify.valueAlloc(self.allocator, truncated, .{});
     }
 
-    fn cloneJsonValue(self: *AuditLogger, value: std.json.Value) !std.json.Value {
-        return switch (value) {
-            .null => .null,
-            .bool => |b| std.json.Value{ .bool = b },
-            .integer => |i| std.json.Value{ .integer = i },
-            .float => |f| std.json.Value{ .float = f },
-            .number_string => |ns| std.json.Value{ .number_string = try self.allocator.dupe(u8, ns) },
-            .string => |s| std.json.Value{ .string = try self.allocator.dupe(u8, s) },
-            .array => |arr| blk: {
-                var cloned_array = std.json.Array.init(self.allocator);
-                for (arr.items) |item| {
-                    try cloned_array.append(try self.cloneJsonValue(item));
-                }
-                break :blk std.json.Value{ .array = cloned_array };
-            },
-            .object => |obj| blk: {
-                var cloned_map = std.json.ObjectMap.init(self.allocator);
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    const cloned_key = try self.allocator.dupe(u8, entry.key_ptr.*);
-                    const cloned_value = try self.cloneJsonValue(entry.value_ptr.*);
-                    try cloned_map.put(cloned_key, cloned_value);
-                }
-                break :blk std.json.Value{ .object = cloned_map };
-            },
-        };
-    }
-
-    fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
-        var val = value;
-        switch (val) {
-            .number_string => |ns| allocator.free(ns),
-            .string => |s| allocator.free(s),
-            .array => |*arr| {
-                for (arr.items) |item| {
-                    freeJsonValue(allocator, item);
-                }
-                arr.deinit();
-            },
-            .object => |*obj| {
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    allocator.free(entry.key_ptr.*);
-                    freeJsonValue(allocator, entry.value_ptr.*);
-                }
-                obj.deinit();
-            },
-            else => {},
-        }
-    }
 };
 
 pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: *const config.Config) !*AuditLogger {

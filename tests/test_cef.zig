@@ -111,6 +111,166 @@ test "CEF with metadata extensions" {
     try testing.expect(std.mem.indexOf(u8, cef_msg, "cn2Label=durationMs cn2=42") != null);
 }
 
+test "CEF header escaping: pipe and backslash are escaped" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    // Vendor and product contain | and \ which must be escaped in CEF headers
+    const identity = config.CefIdentityConfig{
+        .vendor = "DEV|NW",
+        .product = "AU\\DIT",
+        .version = "1.0",
+    };
+
+    var event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "user1",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    const cef_msg = try cef.formatCef(allocator, &event, &identity, clock);
+    defer allocator.free(cef_msg);
+
+    // Pipe in vendor must be escaped as \|
+    try testing.expect(std.mem.startsWith(u8, cef_msg, "CEF:0|DEV\\|NW|AU\\\\DIT|1.0|"));
+}
+
+test "CEF header escaping: equals is NOT escaped in headers" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Per CEF spec, = is only escaped in extension values, not in headers
+    const r = try cef.escapeCefString(allocator, "name=value", true);
+    defer allocator.free(r);
+    try testing.expectEqualStrings("name=value", r);
+}
+
+test "CEF extension value escaping: equals, newlines, carriage returns" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // = is escaped in extension values
+    const r1 = try cef.escapeCefString(allocator, "key=val", false);
+    defer allocator.free(r1);
+    try testing.expectEqualStrings("key\\=val", r1);
+
+    // \n is escaped
+    const r2 = try cef.escapeCefString(allocator, "line1\nline2", false);
+    defer allocator.free(r2);
+    try testing.expectEqualStrings("line1\\nline2", r2);
+
+    // \r is escaped
+    const r3 = try cef.escapeCefString(allocator, "line1\rline2", false);
+    defer allocator.free(r3);
+    try testing.expectEqualStrings("line1\\rline2", r3);
+
+    // Backslash is escaped
+    const r4 = try cef.escapeCefString(allocator, "path\\file", false);
+    defer allocator.free(r4);
+    try testing.expectEqualStrings("path\\\\file", r4);
+
+    // Pipe is NOT escaped in extension values
+    const r5 = try cef.escapeCefString(allocator, "a|b", false);
+    defer allocator.free(r5);
+    try testing.expectEqualStrings("a|b", r5);
+}
+
+test "CEF formatCef with adversarial input produces valid CEF" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    // Identity with special characters
+    const identity = config.CefIdentityConfig{
+        .vendor = "Evil|Vendor\\Corp",
+        .product = "Mal\nicious",
+        .version = "1.0=beta",
+    };
+
+    // Event with special characters in fields
+    var event = events.AuditEvent{
+        .category = "auth",
+        .action = "login\\attempt",
+        .outcome = .failure,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .WARN,
+        .actor_id = "user=admin\nroot",
+        .subject_id = "target|user",
+        .request_id = "req\\123=abc",
+        .session_id = "ses\r\n456",
+        .source_ip = "10.0.0.1",
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    const cef_msg = try cef.formatCef(allocator, &event, &identity, clock);
+    defer allocator.free(cef_msg);
+
+    // The message should start with CEF:0|
+    try testing.expect(std.mem.startsWith(u8, cef_msg, "CEF:0|"));
+
+    // Header pipes must be escaped: vendor "Evil|Vendor\\Corp" -> "Evil\|Vendor\\\\Corp"
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "Evil\\|Vendor\\\\Corp") != null);
+
+    // Extension values: backslash in action is escaped
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "act=login\\\\attempt") != null);
+
+    // Extension values: = in actor_id is escaped, \n is escaped
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "suser=user\\=admin\\nroot") != null);
+
+    // Extension values: \r and \n in session_id are escaped
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "cs2Label=sessionId cs2=ses\\r\\n456") != null);
+
+    // Validate the CEF header structure by walking through the first 7 unescaped
+    // pipes. After the 7th pipe we are in the extension section (where pipes may
+    // appear unescaped in values -- that is allowed by the CEF spec).
+    var pipe_count: usize = 0;
+    var i: usize = 0;
+    while (i < cef_msg.len) : (i += 1) {
+        if (cef_msg[i] == '|') {
+            var bs_count: usize = 0;
+            var j = i;
+            while (j > 0 and cef_msg[j - 1] == '\\') {
+                bs_count += 1;
+                j -= 1;
+            }
+            if (bs_count % 2 == 0) {
+                pipe_count += 1;
+                if (pipe_count == 7) break; // 7th pipe starts the extension
+            }
+        }
+    }
+    // We must have found exactly 7 unescaped pipes for the header
+    try testing.expectEqual(@as(usize, 7), pipe_count);
+
+    // The character after the 7th pipe should be the start of the extension (rt=...)
+    try testing.expect(i + 1 < cef_msg.len);
+    try testing.expect(std.mem.startsWith(u8, cef_msg[i + 1 ..], "rt="));
+
+    // Verify severity field is "8" (WARN) right before the 7th pipe
+    try testing.expectEqual(@as(u8, '8'), cef_msg[i - 1]);
+}
+
 test "CEF event name mapping" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

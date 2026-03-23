@@ -233,10 +233,12 @@ test "integration: default deny filtering" {
     defer allocator.free(content);
 
     if (content.len > 0) {
-        // Fields not in allow_fields should be filtered out under default_deny
-        try testing.expect(std.mem.indexOf(u8, content, "nickname") == null);
+        // GAP-008: Fields not in allow_fields are now redacted (not dropped)
+        // under default_deny. The key "nickname" will appear but with a
+        // redacted value. The original value "loves pizza" must not leak.
         try testing.expect(std.mem.indexOf(u8, content, "loves pizza") == null);
-        // actor_id is in allow_fields and should appear
+        try testing.expect(std.mem.indexOf(u8, content, "jay") == null);
+        // actor_id is in allow_fields and should appear with its value
         try testing.expect(std.mem.indexOf(u8, content, "jane.doe") != null);
     }
 }

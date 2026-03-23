@@ -2,6 +2,7 @@
 // Copyright (c) 2024-2025 CodePros
 
 const std = @import("std");
+const json_util = @import("json_util.zig");
 
 pub const Severity = enum {
     DEBUG,
@@ -80,30 +81,7 @@ pub const AuditEvent = struct {
 
     pub fn deinit(self: *AuditEvent, allocator: std.mem.Allocator) void {
         if (self.metadata) |metadata| {
-            freeJsonValue(allocator, metadata);
-        }
-    }
-
-    fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
-        var val = value;
-        switch (val) {
-            .number_string => |ns| allocator.free(ns),
-            .string => |s| allocator.free(s),
-            .array => |*arr| {
-                for (arr.items) |item| {
-                    freeJsonValue(allocator, item);
-                }
-                arr.deinit();
-            },
-            .object => |*obj| {
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    allocator.free(entry.key_ptr.*);
-                    freeJsonValue(allocator, entry.value_ptr.*);
-                }
-                obj.deinit();
-            },
-            else => {},
+            json_util.freeJsonValue(allocator, metadata);
         }
     }
 
@@ -125,44 +103,10 @@ pub const AuditEvent = struct {
         };
 
         if (self.metadata) |metadata| {
-            // Deep clone JSON value via round-trip serialization
-            const json_str = try std.json.Stringify.valueAlloc(allocator, metadata, .{});
-            defer allocator.free(json_str);
-            var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
-            defer parsed.deinit();
-            // Clone the parsed value so it outlives the parsed container
-            cloned.metadata = try cloneJsonValue(allocator, parsed.value);
+            cloned.metadata = try json_util.cloneJsonValue(allocator, metadata);
         }
 
         return cloned;
-    }
-
-    fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json.Value {
-        return switch (value) {
-            .null => .null,
-            .bool => |b| std.json.Value{ .bool = b },
-            .integer => |i| std.json.Value{ .integer = i },
-            .float => |f| std.json.Value{ .float = f },
-            .number_string => |ns| std.json.Value{ .number_string = try allocator.dupe(u8, ns) },
-            .string => |s| std.json.Value{ .string = try allocator.dupe(u8, s) },
-            .array => |arr| blk: {
-                var cloned_array = std.json.Array.init(allocator);
-                for (arr.items) |item| {
-                    try cloned_array.append(try cloneJsonValue(allocator, item));
-                }
-                break :blk std.json.Value{ .array = cloned_array };
-            },
-            .object => |obj| blk: {
-                var cloned_map = std.json.ObjectMap.init(allocator);
-                var iter = obj.iterator();
-                while (iter.next()) |entry| {
-                    const cloned_key = try allocator.dupe(u8, entry.key_ptr.*);
-                    const cloned_value = try cloneJsonValue(allocator, entry.value_ptr.*);
-                    try cloned_map.put(cloned_key, cloned_value);
-                }
-                break :blk std.json.Value{ .object = cloned_map };
-            },
-        };
     }
 
     pub fn freeCloned(self: *AuditEvent, allocator: std.mem.Allocator) void {
@@ -174,7 +118,7 @@ pub const AuditEvent = struct {
         if (self.session_id) |sid| allocator.free(sid);
         if (self.source_ip) |sip| allocator.free(sip);
         if (self.metadata) |metadata| {
-            freeJsonValue(allocator, metadata);
+            json_util.freeJsonValue(allocator, metadata);
         }
     }
 };

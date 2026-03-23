@@ -7,7 +7,7 @@ A Zig library for audit
 
 ## Features
 
-- **Zero Dependencies**: Pure Zig standard library only
+- **Minimal Dependencies**: Zig standard library plus a small DNS resolution library
 - **Memory Safe**: Proper allocation patterns with no leaks
 - **Cross-Platform**: Linux, macOS, Windows support
 - **Well Tested**: Comprehensive unit and integration tests

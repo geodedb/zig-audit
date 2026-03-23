@@ -86,6 +86,12 @@ pub const SyslogSender = struct {
             .pool_mutex = std.Thread.Mutex{},
         };
 
+        if (sender.config.protocol == .tls) {
+            sender.queue.deinit();
+            allocator.destroy(sender);
+            return error.TlsNotSupported;
+        }
+
         if (sender.config.enabled) {
             sender.thread = try std.Thread.spawn(.{}, workerThread, .{sender});
         }
@@ -386,6 +392,37 @@ pub fn RingBuffer(comptime T: type) type {
             return self.count == 0;
         }
     };
+}
+
+test "SyslogSender.init rejects TLS protocol" {
+    const allocator = std.testing.allocator;
+    var fixed_clock = time.FixedClock.init(1735689600000);
+    const clock = fixed_clock.clock();
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = true,
+        .protocol = .tls,
+        .host = "localhost",
+        .port = 6514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local0,
+        },
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "test",
+        .host = "test-host",
+        .pid = 1,
+    };
+
+    const identity_config = config.CefIdentityConfig{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    };
+
+    const result = SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
+    try std.testing.expectError(error.TlsNotSupported, result);
 }
 
 test "TLS config: default values" {

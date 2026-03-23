@@ -171,7 +171,43 @@ pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
     return parseConfig(allocator, parsed.value);
 }
 
+/// Safely extract a string from a json value, returning error.InvalidConfig if missing or wrong type.
+fn jsonString(obj: std.json.ObjectMap, key: []const u8) ![]const u8 {
+    const val = obj.get(key) orelse return error.InvalidConfig;
+    if (val != .string) return error.InvalidConfig;
+    return val.string;
+}
+
+/// Safely extract an integer from a json value, returning error.InvalidConfig if missing or wrong type.
+fn jsonInteger(obj: std.json.ObjectMap, key: []const u8) !i64 {
+    const val = obj.get(key) orelse return error.InvalidConfig;
+    if (val != .integer) return error.InvalidConfig;
+    return val.integer;
+}
+
+/// Safely extract a bool from a json value, returning error.InvalidConfig if missing or wrong type.
+fn jsonBool(obj: std.json.ObjectMap, key: []const u8) !bool {
+    const val = obj.get(key) orelse return error.InvalidConfig;
+    if (val != .bool) return error.InvalidConfig;
+    return val.bool;
+}
+
+/// Safely extract an object from a json value, returning error.InvalidConfig if missing or wrong type.
+fn jsonObject(obj: std.json.ObjectMap, key: []const u8) !std.json.ObjectMap {
+    const val = obj.get(key) orelse return error.InvalidConfig;
+    if (val != .object) return error.InvalidConfig;
+    return val.object;
+}
+
+/// Safely extract an array from a json value, returning error.InvalidConfig if missing or wrong type.
+fn jsonArray(obj: std.json.ObjectMap, key: []const u8) !std.json.Array {
+    const val = obj.get(key) orelse return error.InvalidConfig;
+    if (val != .array) return error.InvalidConfig;
+    return val.array;
+}
+
 fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
+    if (json != .object) return error.InvalidConfig;
     const root_obj = json.object;
 
     const version_value = root_obj.get("version") orelse return error.MissingVersion;
@@ -182,43 +218,46 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     if (ver != 1) return error.UnsupportedVersion;
 
     const service_value = root_obj.get("service") orelse return error.MissingService;
+    if (service_value != .object) return error.InvalidConfig;
     const service_obj = service_value.object;
     const service = ServiceConfig{
-        .name = try allocator.dupe(u8, service_obj.get("name").?.string),
-        .host = try allocator.dupe(u8, service_obj.get("host").?.string),
-        .pid = @as(u32, @intCast(service_obj.get("pid").?.integer)),
+        .name = try allocator.dupe(u8, try jsonString(service_obj, "name")),
+        .host = try allocator.dupe(u8, try jsonString(service_obj, "host")),
+        .pid = @as(u32, @intCast(try jsonInteger(service_obj, "pid"))),
     };
 
     const identity_value = root_obj.get("identity") orelse return error.MissingIdentity;
+    if (identity_value != .object) return error.InvalidConfig;
     const identity_obj = identity_value.object;
-    const cef_obj = identity_obj.get("cef").?.object;
+    const cef_obj = try jsonObject(identity_obj, "cef");
     const identity = IdentityConfig{
         .cef = CefIdentityConfig{
-            .vendor = try allocator.dupe(u8, cef_obj.get("vendor").?.string),
-            .product = try allocator.dupe(u8, cef_obj.get("product").?.string),
-            .version = try allocator.dupe(u8, cef_obj.get("version").?.string),
+            .vendor = try allocator.dupe(u8, try jsonString(cef_obj, "vendor")),
+            .product = try allocator.dupe(u8, try jsonString(cef_obj, "product")),
+            .version = try allocator.dupe(u8, try jsonString(cef_obj, "version")),
         },
     };
 
     const sinks_value = root_obj.get("sinks") orelse return error.MissingSinks;
+    if (sinks_value != .object) return error.InvalidConfig;
     const sinks_obj = sinks_value.object;
 
-    const file_obj = sinks_obj.get("file").?.object;
+    const file_obj = try jsonObject(sinks_obj, "file");
     const file_sink = FileSinkConfig{
-        .enabled = file_obj.get("enabled").?.bool,
-        .path = try allocator.dupe(u8, file_obj.get("path").?.string),
-        .max_bytes = @as(u64, @intCast(file_obj.get("max_bytes").?.integer)),
-        .backup_count = @as(u32, @intCast(file_obj.get("backup_count").?.integer)),
+        .enabled = try jsonBool(file_obj, "enabled"),
+        .path = try allocator.dupe(u8, try jsonString(file_obj, "path")),
+        .max_bytes = @as(u64, @intCast(try jsonInteger(file_obj, "max_bytes"))),
+        .backup_count = @as(u32, @intCast(try jsonInteger(file_obj, "backup_count"))),
     };
 
-    const syslog_obj = sinks_obj.get("syslog").?.object;
-    const rfc5424_obj = syslog_obj.get("rfc5424").?.object;
-    const facility_str = rfc5424_obj.get("facility").?.string;
+    const syslog_obj = try jsonObject(sinks_obj, "syslog");
+    const rfc5424_obj = try jsonObject(syslog_obj, "rfc5424");
+    const facility_str = try jsonString(rfc5424_obj, "facility");
     const syslog_sink = SyslogSinkConfig{
-        .enabled = syslog_obj.get("enabled").?.bool,
-        .protocol = try SyslogProtocol.fromString(syslog_obj.get("protocol").?.string),
-        .host = try allocator.dupe(u8, syslog_obj.get("host").?.string),
-        .port = @as(u16, @intCast(syslog_obj.get("port").?.integer)),
+        .enabled = try jsonBool(syslog_obj, "enabled"),
+        .protocol = try SyslogProtocol.fromString(try jsonString(syslog_obj, "protocol")),
+        .host = try allocator.dupe(u8, try jsonString(syslog_obj, "host")),
+        .port = @as(u16, @intCast(try jsonInteger(syslog_obj, "port"))),
         .rfc5424 = SyslogRfc5424Config{
             .facility = try SyslogFacility.fromString(facility_str),
         },
@@ -230,26 +269,29 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     };
 
     const filters_value = root_obj.get("filters") orelse return error.MissingFilters;
+    if (filters_value != .object) return error.InvalidConfig;
     const filters_obj = filters_value.object;
 
-    const allow_fields_value = filters_obj.get("allow_fields").?.array;
-    const allow_fields = try allocator.alloc([]const u8, allow_fields_value.items.len);
-    for (allow_fields_value.items, 0..) |item, i| {
+    const allow_fields_arr = try jsonArray(filters_obj, "allow_fields");
+    const allow_fields = try allocator.alloc([]const u8, allow_fields_arr.items.len);
+    for (allow_fields_arr.items, 0..) |item, i| {
+        if (item != .string) return error.InvalidConfig;
         allow_fields[i] = try allocator.dupe(u8, item.string);
     }
 
-    const deny_patterns_value = filters_obj.get("deny_key_patterns").?.array;
-    const deny_patterns = try allocator.alloc([]const u8, deny_patterns_value.items.len);
-    for (deny_patterns_value.items, 0..) |item, i| {
+    const deny_patterns_arr = try jsonArray(filters_obj, "deny_key_patterns");
+    const deny_patterns = try allocator.alloc([]const u8, deny_patterns_arr.items.len);
+    for (deny_patterns_arr.items, 0..) |item, i| {
+        if (item != .string) return error.InvalidConfig;
         deny_patterns[i] = try allocator.dupe(u8, item.string);
     }
 
     const filters = FiltersConfig{
-        .default_deny = filters_obj.get("default_deny").?.bool,
+        .default_deny = try jsonBool(filters_obj, "default_deny"),
         .allow_fields = allow_fields,
         .deny_key_patterns = deny_patterns,
-        .pii_mode = try PiiMode.fromString(filters_obj.get("pii_mode").?.string),
-        .pci_mode = filters_obj.get("pci_mode").?.bool,
+        .pii_mode = try PiiMode.fromString(try jsonString(filters_obj, "pii_mode")),
+        .pci_mode = try jsonBool(filters_obj, "pci_mode"),
     };
 
     return Config{
@@ -260,6 +302,104 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
         .filters = filters,
         .allocator = allocator,
     };
+}
+
+/// Build a complete valid JSON config object for testing purposes.
+/// Caller must call parsed.deinit() when done.
+fn buildValidTestJson(allocator: std.mem.Allocator) !std.json.Parsed(std.json.Value) {
+    const valid_json =
+        \\{
+        \\  "version": 1,
+        \\  "service": {"name": "svc", "host": "h", "pid": 1},
+        \\  "identity": {"cef": {"vendor": "V", "product": "P", "version": "1"}},
+        \\  "sinks": {
+        \\    "file": {"enabled": false, "path": "/tmp/a.log", "max_bytes": 1024, "backup_count": 1},
+        \\    "syslog": {"enabled": false, "protocol": "udp", "host": "localhost", "port": 514, "rfc5424": {"facility": "local0"}}
+        \\  },
+        \\  "filters": {"default_deny": false, "allow_fields": [], "deny_key_patterns": [], "pii_mode": "off", "pci_mode": false}
+        \\}
+    ;
+    return std.json.parseFromSlice(std.json.Value, allocator, valid_json, .{});
+}
+
+test "parseConfig rejects missing version" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"service": {"name": "s", "host": "h", "pid": 1}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.MissingVersion, parseConfig(allocator, parsed.value));
+}
+
+test "parseConfig rejects invalid version type" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"version": "one"}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.InvalidVersion, parseConfig(allocator, parsed.value));
+}
+
+test "parseConfig rejects unsupported version" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"version": 99}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.UnsupportedVersion, parseConfig(allocator, parsed.value));
+}
+
+test "parseConfig rejects missing service" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"version": 1}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.MissingService, parseConfig(allocator, parsed.value));
+}
+
+test "parseConfig rejects missing service.name" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"version": 1, "service": {"host": "h", "pid": 1}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.InvalidConfig, parseConfig(allocator, parsed.value));
+}
+
+test "parseConfig rejects wrong type for service.name" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{"version": 1, "service": {"name": 42, "host": "h", "pid": 1}}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.InvalidConfig, parseConfig(allocator, parsed.value));
+}
+
+test "parseConfig accepts valid complete config" {
+    const allocator = std.testing.allocator;
+    var parsed = try buildValidTestJson(allocator);
+    defer parsed.deinit();
+
+    var cfg = try parseConfig(allocator, parsed.value);
+    defer cfg.deinit();
+
+    try std.testing.expectEqual(@as(u32, 1), cfg.version);
+    try std.testing.expectEqualStrings("svc", cfg.service.name);
+    try std.testing.expectEqualStrings("h", cfg.service.host);
+    try std.testing.expectEqual(@as(u32, 1), cfg.service.pid);
 }
 
 /// Create a test configuration with sensible defaults.

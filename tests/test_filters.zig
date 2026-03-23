@@ -5,6 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 const audit = @import("audit");
 const filters = audit.filters;
+const json_util = audit.json_util;
 const config = audit.config;
 
 test "sensitive key detection" {
@@ -152,7 +153,7 @@ test "metadata filtering and redaction" {
             var iter = obj_mut.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.key_ptr.*);
-                freeJsonValue(allocator, entry.value_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
             obj_mut.deinit();
         }
@@ -169,30 +170,255 @@ test "metadata filtering and redaction" {
             try testing.expectEqualStrings("[REDACTED]", password_value.string);
         }
 
-        try testing.expect(!obj.contains("unknown_field"));
+        // GAP-008 fix: unknown_field is now present with generic [REDACTED]
+        // instead of being silently dropped when default_deny is true
+        try testing.expect(obj.contains("unknown_field"));
+        if (obj.get("unknown_field")) |unknown_value| {
+            try testing.expectEqualStrings("[REDACTED]", unknown_value.string);
+        }
+
+        // secret_data matches deny pattern "secret" and now isSensitiveKey
+        // (GAP-010 added "secret" pattern), so it gets [REDACTED_TOKEN]
+        if (obj.get("secret_data")) |secret_value| {
+            try testing.expectEqualStrings("[REDACTED_TOKEN]", secret_value.string);
+        }
     }
 }
 
-fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
-    var val = value;
-    switch (val) {
-        .number_string => |ns| allocator.free(ns),
-        .string => |s| allocator.free(s),
-        .array => |*arr| {
-            for (arr.items) |item| {
-                freeJsonValue(allocator, item);
+test "expanded sensitive key detection" {
+    // GAP-010: secret, credential, authorization, bearer, access_key, passphrase, pin
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "aws_secret_key") != null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "credentials") != null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "authorization_header") != null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "bearer_token") != null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "access_key_id") != null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "passphrase") != null);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "bank_pin") != null);
+
+    // Verify the specific redaction token types
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "db_secret") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "credential") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "authorization") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "bearer") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "access_key") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "passphrase") == .password);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "bank_pin") == .card);
+
+    // Case insensitivity
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "Authorization") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "BEARER_TOKEN") == .token);
+    try testing.expect(filters.isSensitiveKey(testing.allocator, "CLIENT_SECRET") == .token);
+}
+
+test "recursive redaction of nested objects" {
+    // GAP-008: {"user": {"password": "secret"}} with "user" allowed
+    // should produce {"user": {"password": "[REDACTED]"}}
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "user");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = true,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    // Build inner object: {"password": "secret123"}
+    var inner_obj = std.json.ObjectMap.init(allocator);
+    try inner_obj.put("password", std.json.Value{ .string = "secret123" });
+
+    // Build outer: {"user": inner_obj}
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer {
+        // inner_obj is owned by metadata_obj, free inner first
+        if (metadata_obj.get("user")) |v| {
+            if (v == .object) {
+                var inner = @constCast(&v.object);
+                inner.deinit();
             }
-            arr.deinit();
-        },
-        .object => |*obj| {
-            var iter = obj.iterator();
+        }
+        metadata_obj.deinit();
+    }
+    try metadata_obj.put("user", std.json.Value{ .object = inner_obj });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
             while (iter.next()) |entry| {
                 allocator.free(entry.key_ptr.*);
-                freeJsonValue(allocator, entry.value_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj.deinit();
-        },
-        else => {},
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        // "user" should be present
+        try testing.expect(obj.contains("user"));
+
+        if (obj.get("user")) |user_val| {
+            try testing.expect(user_val == .object);
+            const user_obj = user_val.object;
+
+            // "password" inside "user" should be redacted
+            if (user_obj.get("password")) |pw_val| {
+                try testing.expectEqualStrings("[REDACTED]", pw_val.string);
+            } else {
+                // password field must be present (not silently dropped)
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "redaction of sensitive values in arrays" {
+    // GAP-008: {"items": ["4111111111111111"]} with "items" allowed
+    // should produce {"items": ["[REDACTED_PAN]"]}
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 1);
+    allow_fields[0] = try allocator.dupe(u8, "items");
+    defer {
+        for (allow_fields) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
+
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    // Build array with a PAN value
+    var arr = std.json.Array.init(allocator);
+    try arr.append(std.json.Value{ .string = "4111111111111111" });
+    try arr.append(std.json.Value{ .string = "safe_value" });
+    defer arr.deinit();
+
+    // Build outer: {"items": arr}
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+    try metadata_obj.put("items", std.json.Value{ .array = arr });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        try testing.expect(obj.contains("items"));
+        if (obj.get("items")) |items_val| {
+            try testing.expect(items_val == .array);
+            const items = items_val.array;
+
+            // First element should be redacted PAN
+            try testing.expectEqualStrings("[REDACTED_PAN]", items.items[0].string);
+            // Second element should pass through
+            try testing.expectEqualStrings("safe_value", items.items[1].string);
+        }
+    }
+}
+
+test "deny pattern match without isSensitiveKey produces generic redaction" {
+    // GAP-008 Q4: a key matching deny_key_patterns but not isSensitiveKey
+    // should get [REDACTED] instead of being silently dropped
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 0);
+    defer allocator.free(allow_fields);
+
+    // Use a deny pattern that won't match any isSensitiveKey built-in
+    const deny_patterns = try allocator.alloc([]const u8, 1);
+    deny_patterns[0] = try allocator.dupe(u8, "internal");
+    defer {
+        for (deny_patterns) |pattern| allocator.free(pattern);
+        allocator.free(deny_patterns);
+    }
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    var metadata_obj = std.json.ObjectMap.init(allocator);
+    defer metadata_obj.deinit();
+
+    // "internal_data" matches deny pattern "internal" but not isSensitiveKey
+    try metadata_obj.put("internal_data", std.json.Value{ .string = "some-value" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit();
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const obj = f.object;
+
+        // The field MUST be present with a generic redaction, not silently dropped
+        try testing.expect(obj.contains("internal_data"));
+        if (obj.get("internal_data")) |val| {
+            try testing.expectEqualStrings("[REDACTED]", val.string);
+        } else {
+            return error.TestUnexpectedResult;
+        }
     }
 }
 

@@ -104,6 +104,7 @@ pub const FixedClock = struct {
 };
 
 pub const IdGen = struct {
+    context: *anyopaque,
     vtable: *const VTable,
 
     const VTable = struct {
@@ -113,34 +114,37 @@ pub const IdGen = struct {
     };
 
     pub fn traceId(self: IdGen, buf: *[32]u8) void {
-        return self.vtable.traceId(@constCast(@ptrCast(self.vtable)), buf);
+        return self.vtable.traceId(self.context, buf);
     }
 
     pub fn spanId(self: IdGen, buf: *[16]u8) void {
-        return self.vtable.spanId(@constCast(@ptrCast(self.vtable)), buf);
+        return self.vtable.spanId(self.context, buf);
     }
 
     pub fn requestId(self: IdGen, allocator: std.mem.Allocator) []const u8 {
-        return self.vtable.requestId(@constCast(@ptrCast(self.vtable)), allocator);
+        return self.vtable.requestId(self.context, allocator);
     }
 };
 
 pub const SystemIdGen = struct {
     rng: std.Random.DefaultPrng,
-    vtable: IdGen.VTable = IdGen.VTable{
+
+    const vtable = IdGen.VTable{
         .traceId = traceIdImpl,
         .spanId = spanIdImpl,
         .requestId = requestIdImpl,
-    },
+    };
 
     pub fn init() SystemIdGen {
+        var seed_bytes: [8]u8 = undefined;
+        std.crypto.random.bytes(&seed_bytes);
         return SystemIdGen{
-            .rng = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp())),
+            .rng = std.Random.DefaultPrng.init(@bitCast(seed_bytes)),
         };
     }
 
     pub fn idGen(self: *SystemIdGen) IdGen {
-        return IdGen{ .vtable = &self.vtable };
+        return IdGen{ .context = @ptrCast(self), .vtable = &vtable };
     }
 
     fn traceIdImpl(ptr: *anyopaque, buf: *[32]u8) void {
@@ -168,11 +172,12 @@ pub const FixedIdGen = struct {
     trace_id: [32]u8,
     span_id: [16]u8,
     request_id: []const u8,
-    vtable: IdGen.VTable = IdGen.VTable{
+
+    const vtable = IdGen.VTable{
         .traceId = traceIdImpl,
         .spanId = spanIdImpl,
         .requestId = requestIdImpl,
-    },
+    };
 
     pub fn init(trace_id: [32]u8, span_id: [16]u8, request_id: []const u8) FixedIdGen {
         return FixedIdGen{
@@ -183,7 +188,7 @@ pub const FixedIdGen = struct {
     }
 
     pub fn idGen(self: *FixedIdGen) IdGen {
-        return IdGen{ .vtable = &self.vtable };
+        return IdGen{ .context = @ptrCast(self), .vtable = &vtable };
     }
 
     fn traceIdImpl(ptr: *anyopaque, buf: *[32]u8) void {
@@ -207,3 +212,80 @@ pub const TEST_TIMESTAMP_MS: i128 = 1735689600000;
 pub const TEST_TRACE_ID = "11111111111111111111111111111111".*;
 pub const TEST_SPAN_ID = "2222222222222222".*;
 pub const TEST_REQUEST_ID = "req-abc123";
+
+fn isHexString(s: []const u8) bool {
+    for (s) |c| {
+        if (!std.ascii.isHex(c)) return false;
+    }
+    return true;
+}
+
+test "SystemIdGen produces valid 32-hex trace IDs via vtable dispatch" {
+    var gen = SystemIdGen.init();
+    const id_gen = gen.idGen();
+
+    var buf: [32]u8 = undefined;
+    id_gen.traceId(&buf);
+
+    // Must be exactly 32 hex characters
+    try std.testing.expect(isHexString(&buf));
+    try std.testing.expectEqual(@as(usize, 32), buf.len);
+}
+
+test "SystemIdGen produces valid 16-hex span IDs via vtable dispatch" {
+    var gen = SystemIdGen.init();
+    const id_gen = gen.idGen();
+
+    var buf: [16]u8 = undefined;
+    id_gen.spanId(&buf);
+
+    // Must be exactly 16 hex characters
+    try std.testing.expect(isHexString(&buf));
+    try std.testing.expectEqual(@as(usize, 16), buf.len);
+}
+
+test "SystemIdGen produces valid request IDs via vtable dispatch" {
+    var gen = SystemIdGen.init();
+    const id_gen = gen.idGen();
+
+    const req_id = id_gen.requestId(std.testing.allocator);
+    defer std.testing.allocator.free(req_id);
+
+    // Request IDs start with "req-"
+    try std.testing.expect(std.mem.startsWith(u8, req_id, "req-"));
+    try std.testing.expect(req_id.len > 4);
+}
+
+test "FixedIdGen returns exact values via vtable dispatch" {
+    const trace = "aabbccdd11223344aabbccdd11223344".*;
+    const span = "aabbccdd11223344".*;
+    const req = "req-fixed-test";
+
+    var gen = FixedIdGen.init(trace, span, req);
+    const id_gen = gen.idGen();
+
+    var trace_buf: [32]u8 = undefined;
+    id_gen.traceId(&trace_buf);
+    try std.testing.expectEqualStrings(&trace, &trace_buf);
+
+    var span_buf: [16]u8 = undefined;
+    id_gen.spanId(&span_buf);
+    try std.testing.expectEqualStrings(&span, &span_buf);
+
+    const req_id = id_gen.requestId(std.testing.allocator);
+    defer std.testing.allocator.free(req_id);
+    try std.testing.expectEqualStrings(req, req_id);
+}
+
+test "SystemIdGen produces different trace IDs on consecutive calls" {
+    var gen = SystemIdGen.init();
+    const id_gen = gen.idGen();
+
+    var buf1: [32]u8 = undefined;
+    var buf2: [32]u8 = undefined;
+    id_gen.traceId(&buf1);
+    id_gen.traceId(&buf2);
+
+    // Two consecutive calls should produce different IDs
+    try std.testing.expect(!std.mem.eql(u8, &buf1, &buf2));
+}

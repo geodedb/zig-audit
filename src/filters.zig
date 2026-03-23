@@ -3,6 +3,7 @@
 
 const std = @import("std");
 const config = @import("config.zig");
+const json_util = @import("json_util.zig");
 
 pub const FilterResult = enum {
     allow,
@@ -44,12 +45,20 @@ pub fn isSensitiveKey(allocator: std.mem.Allocator, key: []const u8) ?RedactionT
 
     // Password-related
     if (std.mem.indexOf(u8, lower_key, "password") != null or
-        std.mem.indexOf(u8, lower_key, "passwd") != null) return .password;
+        std.mem.indexOf(u8, lower_key, "passwd") != null or
+        std.mem.indexOf(u8, lower_key, "passphrase") != null) return .password;
 
     // Token-related
     if (std.mem.indexOf(u8, lower_key, "token") != null or
         std.mem.indexOf(u8, lower_key, "apikey") != null or
         std.mem.indexOf(u8, lower_key, "api_key") != null) return .token;
+
+    // Secret/credential/auth-related
+    if (std.mem.indexOf(u8, lower_key, "secret") != null or
+        std.mem.indexOf(u8, lower_key, "credential") != null or
+        std.mem.indexOf(u8, lower_key, "bearer") != null or
+        std.mem.indexOf(u8, lower_key, "authorization") != null or
+        std.mem.indexOf(u8, lower_key, "access_key") != null) return .token;
 
     // JWT
     if (std.mem.indexOf(u8, lower_key, "jwt") != null) return .jwt;
@@ -58,6 +67,9 @@ pub fn isSensitiveKey(allocator: std.mem.Allocator, key: []const u8) ?RedactionT
     if (std.mem.indexOf(u8, lower_key, "card") != null or
         std.mem.indexOf(u8, lower_key, "cc") != null or
         std.mem.indexOf(u8, lower_key, "pan") != null) return .card;
+
+    // Banking PIN
+    if (std.mem.indexOf(u8, lower_key, "pin") != null) return .card;
 
     // CVV
     if (std.mem.indexOf(u8, lower_key, "cvv") != null or
@@ -242,11 +254,27 @@ fn isAllDigits(s: []const u8) bool {
     return true;
 }
 
+/// Maximum recursion depth for nested metadata redaction to prevent stack overflow.
+const max_redaction_depth: u32 = 10;
+
 pub fn filterAndRedactMetadata(
     allocator: std.mem.Allocator,
     metadata: std.json.Value,
-    filters: *const config.FiltersConfig,
+    filters_cfg: *const config.FiltersConfig,
 ) !?std.json.Value {
+    return filterAndRedactMetadataRecursive(allocator, metadata, filters_cfg, 0);
+}
+
+fn filterAndRedactMetadataRecursive(
+    allocator: std.mem.Allocator,
+    metadata: std.json.Value,
+    filters_cfg: *const config.FiltersConfig,
+    depth: u32,
+) std.mem.Allocator.Error!?std.json.Value {
+    if (depth >= max_redaction_depth) {
+        return try json_util.cloneJsonValue(allocator, metadata);
+    }
+
     return switch (metadata) {
         .object => |obj| blk: {
             var filtered_map = std.json.ObjectMap.init(allocator);
@@ -257,17 +285,19 @@ pub fn filterAndRedactMetadata(
                 const key = entry.key_ptr.*;
                 const value = entry.value_ptr.*;
 
-                const filter_result = shouldFilterField(allocator, key, value, filters);
+                const filter_result = shouldFilterField(allocator, key, value, filters_cfg);
                 switch (filter_result) {
                     .allow => {
-                        const cloned_value = try cloneJsonValue(allocator, value);
-                        try filtered_map.put(try allocator.dupe(u8, key), cloned_value);
+                        const processed_value = try redactValueRecursive(allocator, value, filters_cfg, depth + 1);
+                        try filtered_map.put(try allocator.dupe(u8, key), processed_value);
                     },
                     .redact => {
-                        if (isSensitiveKey(allocator, key)) |redaction_token| {
-                            const redacted = std.json.Value{ .string = try allocator.dupe(u8, redaction_token.toString()) };
-                            try filtered_map.put(try allocator.dupe(u8, key), redacted);
-                        }
+                        const redaction_str = if (isSensitiveKey(allocator, key)) |redaction_token|
+                            redaction_token.toString()
+                        else
+                            "[REDACTED]";
+                        const redacted = std.json.Value{ .string = try allocator.dupe(u8, redaction_str) };
+                        try filtered_map.put(try allocator.dupe(u8, key), redacted);
                     },
                     .drop_event => {
                         filtered_map.deinit();
@@ -279,6 +309,74 @@ pub fn filterAndRedactMetadata(
             break :blk std.json.Value{ .object = filtered_map };
         },
         else => metadata,
+    };
+}
+
+/// Recursively process a value for redaction. For objects, recurse into
+/// filterAndRedactMetadataRecursive. For arrays, scan each element for
+/// sensitive values and recurse into object elements. For strings, apply
+/// value-type detection. Other scalars pass through unchanged.
+fn redactValueRecursive(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+    filters_cfg: *const config.FiltersConfig,
+    depth: u32,
+) std.mem.Allocator.Error!std.json.Value {
+    if (depth >= max_redaction_depth) {
+        return try json_util.cloneJsonValue(allocator, value);
+    }
+
+    return switch (value) {
+        .object => blk: {
+            const result = try filterAndRedactMetadataRecursive(allocator, value, filters_cfg, depth);
+            // filterAndRedactMetadataRecursive returns null for drop_event;
+            // in a nested context, replace with an empty object
+            break :blk result orelse std.json.Value{ .object = std.json.ObjectMap.init(allocator) };
+        },
+        .array => |arr| blk: {
+            var redacted_array = std.json.Array.init(allocator);
+            errdefer redacted_array.deinit();
+
+            for (arr.items) |item| {
+                switch (item) {
+                    .string => |s| {
+                        // Apply value-type detection on string elements
+                        if (detectValueType(s)) |detected_token| {
+                            try redacted_array.append(std.json.Value{
+                                .string = try allocator.dupe(u8, detected_token.toString()),
+                            });
+                        } else {
+                            try redacted_array.append(std.json.Value{
+                                .string = try allocator.dupe(u8, s),
+                            });
+                        }
+                    },
+                    .object => {
+                        // Recurse into nested objects within arrays
+                        const processed = try redactValueRecursive(allocator, item, filters_cfg, depth + 1);
+                        try redacted_array.append(processed);
+                    },
+                    .array => {
+                        // Recurse into nested arrays
+                        const processed = try redactValueRecursive(allocator, item, filters_cfg, depth + 1);
+                        try redacted_array.append(processed);
+                    },
+                    else => {
+                        try redacted_array.append(try json_util.cloneJsonValue(allocator, item));
+                    },
+                }
+            }
+
+            break :blk std.json.Value{ .array = redacted_array };
+        },
+        .string => |s| blk: {
+            // Apply value-type detection on allowed string values
+            if (detectValueType(s)) |detected_token| {
+                break :blk std.json.Value{ .string = try allocator.dupe(u8, detected_token.toString()) };
+            }
+            break :blk std.json.Value{ .string = try allocator.dupe(u8, s) };
+        },
+        else => try json_util.cloneJsonValue(allocator, value),
     };
 }
 
@@ -317,30 +415,3 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
     return .allow;
 }
 
-fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.json.Value {
-    return switch (value) {
-        .null => .null,
-        .bool => |b| std.json.Value{ .bool = b },
-        .integer => |i| std.json.Value{ .integer = i },
-        .float => |f| std.json.Value{ .float = f },
-        .number_string => |ns| std.json.Value{ .number_string = try allocator.dupe(u8, ns) },
-        .string => |s| std.json.Value{ .string = try allocator.dupe(u8, s) },
-        .array => |arr| blk: {
-            var cloned_array = std.json.Array.init(allocator);
-            for (arr.items) |item| {
-                try cloned_array.append(try cloneJsonValue(allocator, item));
-            }
-            break :blk std.json.Value{ .array = cloned_array };
-        },
-        .object => |obj| blk: {
-            var cloned_map = std.json.ObjectMap.init(allocator);
-            var iter = obj.iterator();
-            while (iter.next()) |entry| {
-                const cloned_key = try allocator.dupe(u8, entry.key_ptr.*);
-                const cloned_value = try cloneJsonValue(allocator, entry.value_ptr.*);
-                try cloned_map.put(cloned_key, cloned_value);
-            }
-            break :blk std.json.Value{ .object = cloned_map };
-        },
-    };
-}

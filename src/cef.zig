@@ -28,23 +28,33 @@ pub fn formatCef(
     try extension.writer(allocator).print("rt={s}", .{ts_str});
 
     // Core fields
-    try extension.writer(allocator).print(" act={s}", .{escapeValue(event.action)});
+    const escaped_action = try escapeValue(allocator, event.action);
+    defer allocator.free(escaped_action);
+    try extension.writer(allocator).print(" act={s}", .{escaped_action});
     try extension.writer(allocator).print(" outcome={s}", .{event.outcome.toString()});
 
     if (event.actor_id.len > 0) {
-        try extension.writer(allocator).print(" suser={s}", .{escapeValue(event.actor_id)});
+        const escaped_actor = try escapeValue(allocator, event.actor_id);
+        defer allocator.free(escaped_actor);
+        try extension.writer(allocator).print(" suser={s}", .{escaped_actor});
     }
 
     if (event.subject_id) |subject_id| {
-        try extension.writer(allocator).print(" duser={s}", .{escapeValue(subject_id)});
+        const escaped_subject = try escapeValue(allocator, subject_id);
+        defer allocator.free(escaped_subject);
+        try extension.writer(allocator).print(" duser={s}", .{escaped_subject});
     }
 
     if (event.source_ip) |source_ip| {
-        try extension.writer(allocator).print(" src={s}", .{escapeValue(source_ip)});
+        const escaped_ip = try escapeValue(allocator, source_ip);
+        defer allocator.free(escaped_ip);
+        try extension.writer(allocator).print(" src={s}", .{escaped_ip});
     }
 
     if (event.request_id) |request_id| {
-        try extension.writer(allocator).print(" requestId={s}", .{escapeValue(request_id)});
+        const escaped_req = try escapeValue(allocator, request_id);
+        defer allocator.free(escaped_req);
+        try extension.writer(allocator).print(" requestId={s}", .{escaped_req});
     }
 
     if (event.trace_id) |trace_id| {
@@ -56,14 +66,20 @@ pub fn formatCef(
     }
 
     // Custom signature fields
-    try extension.writer(allocator).print(" cs1Label=actorId cs1={s}", .{escapeValue(event.actor_id)});
+    const escaped_cs1 = try escapeValue(allocator, event.actor_id);
+    defer allocator.free(escaped_cs1);
+    try extension.writer(allocator).print(" cs1Label=actorId cs1={s}", .{escaped_cs1});
 
     if (event.session_id) |session_id| {
-        try extension.writer(allocator).print(" cs2Label=sessionId cs2={s}", .{escapeValue(session_id)});
+        const escaped_session = try escapeValue(allocator, session_id);
+        defer allocator.free(escaped_session);
+        try extension.writer(allocator).print(" cs2Label=sessionId cs2={s}", .{escaped_session});
     }
 
     if (event.request_id) |request_id| {
-        try extension.writer(allocator).print(" deviceExternalId={s}", .{escapeValue(request_id)});
+        const escaped_dev = try escapeValue(allocator, request_id);
+        defer allocator.free(escaped_dev);
+        try extension.writer(allocator).print(" deviceExternalId={s}", .{escaped_dev});
     }
 
     // Add metadata fields if present
@@ -71,12 +87,24 @@ pub fn formatCef(
         try addMetadataExtensions(allocator, &extension, metadata);
     }
 
+    // Escape header fields
+    const escaped_vendor = try escapeHeader(allocator, identity.vendor);
+    defer allocator.free(escaped_vendor);
+    const escaped_product = try escapeHeader(allocator, identity.product);
+    defer allocator.free(escaped_product);
+    const escaped_version = try escapeHeader(allocator, identity.version);
+    defer allocator.free(escaped_version);
+    const escaped_sig_id = try escapeHeader(allocator, signature_id);
+    defer allocator.free(escaped_sig_id);
+    const escaped_name = try escapeHeader(allocator, name);
+    defer allocator.free(escaped_name);
+
     return std.fmt.allocPrint(allocator, "CEF:0|{s}|{s}|{s}|{s}|{s}|{d}|{s}", .{
-        escapeHeader(identity.vendor),
-        escapeHeader(identity.product),
-        escapeHeader(identity.version),
-        escapeHeader(signature_id),
-        escapeHeader(name),
+        escaped_vendor,
+        escaped_product,
+        escaped_version,
+        escaped_sig_id,
+        escaped_name,
         severity,
         extension.items,
     });
@@ -114,11 +142,15 @@ fn addMetadataExtensions(allocator: std.mem.Allocator, extension: *std.ArrayList
 
         if (std.mem.eql(u8, key, "db.operation")) {
             if (value == .string) {
-                try extension.writer(allocator).print(" cs3Label=dbOperation cs3={s}", .{escapeValue(value.string)});
+                const escaped = try escapeValue(allocator, value.string);
+                defer allocator.free(escaped);
+                try extension.writer(allocator).print(" cs3Label=dbOperation cs3={s}", .{escaped});
             }
         } else if (std.mem.eql(u8, key, "db.table")) {
             if (value == .string) {
-                try extension.writer(allocator).print(" cs4Label=dbTable cs4={s}", .{escapeValue(value.string)});
+                const escaped = try escapeValue(allocator, value.string);
+                defer allocator.free(escaped);
+                try extension.writer(allocator).print(" cs4Label=dbTable cs4={s}", .{escaped});
             }
         } else if (std.mem.eql(u8, key, "db.rowCount")) {
             if (value == .integer) {
@@ -137,30 +169,48 @@ fn addMetadataExtensions(allocator: std.mem.Allocator, extension: *std.ArrayList
 fn addGenericExtension(allocator: std.mem.Allocator, extension: *std.ArrayList(u8), key: []const u8, value: std.json.Value) !void {
     switch (value) {
         .string => |s| {
-            try extension.writer(allocator).print(" {s}={s}", .{ escapeKey(key), escapeValue(s) });
+            const escaped_key = try escapeKey(allocator, key);
+            defer allocator.free(escaped_key);
+            const escaped_val = try escapeValue(allocator, s);
+            defer allocator.free(escaped_val);
+            try extension.writer(allocator).print(" {s}={s}", .{ escaped_key, escaped_val });
         },
         .integer => |i| {
-            try extension.writer(allocator).print(" {s}={d}", .{ escapeKey(key), i });
+            const escaped_key = try escapeKey(allocator, key);
+            defer allocator.free(escaped_key);
+            try extension.writer(allocator).print(" {s}={d}", .{ escaped_key, i });
         },
         .bool => |b| {
-            try extension.writer(allocator).print(" {s}={s}", .{ escapeKey(key), if (b) "true" else "false" });
+            const escaped_key = try escapeKey(allocator, key);
+            defer allocator.free(escaped_key);
+            try extension.writer(allocator).print(" {s}={s}", .{ escaped_key, if (b) "true" else "false" });
         },
         else => {},
     }
 }
 
-fn escapeHeader(s: []const u8) []const u8 {
-    return s;
+/// Escape a CEF header field value. Headers escape `\` and `|`.
+fn escapeHeader(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    return escapeCefString(allocator, s, true);
 }
 
-fn escapeValue(s: []const u8) []const u8 {
-    return s;
+/// Escape a CEF extension value. Extension values escape `\`, `=`, `\n`, and `\r`.
+fn escapeValue(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    return escapeCefString(allocator, s, false);
 }
 
-fn escapeKey(s: []const u8) []const u8 {
-    return s;
+/// Escape a CEF extension key. Same rules as extension values.
+fn escapeKey(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
+    return escapeCefString(allocator, s, false);
 }
 
+/// Core CEF string escaping function.
+///
+/// When `is_header` is true (header fields): escapes `\` to `\\` and `|` to `\|`.
+/// Newlines are replaced with spaces. `=` is NOT escaped in headers.
+///
+/// When `is_header` is false (extension values/keys): escapes `\` to `\\`,
+/// `=` to `\=`, `\n` to `\\n`, `\r` to `\\r`. `|` is NOT escaped in extensions.
 pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_header: bool) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, input.len + 16);
     errdefer result.deinit(allocator);
@@ -169,7 +219,7 @@ pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_heade
         switch (c) {
             '\\' => try result.appendSlice(allocator, "\\\\"),
             '|' => if (is_header) try result.appendSlice(allocator, "\\|") else try result.append(allocator, c),
-            '=' => if (is_header) try result.appendSlice(allocator, "\\=") else try result.appendSlice(allocator, "\\="),
+            '=' => if (is_header) try result.append(allocator, c) else try result.appendSlice(allocator, "\\="),
             '\n' => if (!is_header) try result.appendSlice(allocator, "\\n") else try result.append(allocator, ' '),
             '\r' => if (!is_header) try result.appendSlice(allocator, "\\r") else try result.append(allocator, ' '),
             else => try result.append(allocator, c),
@@ -218,4 +268,83 @@ test "CEF formatting" {
     try testing.expect(std.mem.indexOf(u8, cef_msg, "act=login") != null);
     try testing.expect(std.mem.indexOf(u8, cef_msg, "outcome=success") != null);
     try testing.expect(std.mem.indexOf(u8, cef_msg, "suser=jane.doe") != null);
+}
+
+test "escapeCefString: header escapes backslash and pipe" {
+    const testing = std.testing;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Backslash is escaped
+    const r1 = try escapeCefString(allocator, "vendor\\name", true);
+    defer allocator.free(r1);
+    try testing.expectEqualStrings("vendor\\\\name", r1);
+
+    // Pipe is escaped in headers
+    const r2 = try escapeCefString(allocator, "product|v2", true);
+    defer allocator.free(r2);
+    try testing.expectEqualStrings("product\\|v2", r2);
+
+    // Equals is NOT escaped in headers (CEF spec: only in extensions)
+    const r3 = try escapeCefString(allocator, "key=val", true);
+    defer allocator.free(r3);
+    try testing.expectEqualStrings("key=val", r3);
+
+    // Newlines are replaced with spaces in headers
+    const r4 = try escapeCefString(allocator, "line1\nline2\rline3", true);
+    defer allocator.free(r4);
+    try testing.expectEqualStrings("line1 line2 line3", r4);
+}
+
+test "escapeCefString: extension value escapes backslash, equals, and newlines" {
+    const testing = std.testing;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Backslash is escaped
+    const r1 = try escapeCefString(allocator, "path\\to\\file", false);
+    defer allocator.free(r1);
+    try testing.expectEqualStrings("path\\\\to\\\\file", r1);
+
+    // Equals is escaped in extensions
+    const r2 = try escapeCefString(allocator, "a=b", false);
+    defer allocator.free(r2);
+    try testing.expectEqualStrings("a\\=b", r2);
+
+    // Newline is escaped in extensions
+    const r3 = try escapeCefString(allocator, "line1\nline2", false);
+    defer allocator.free(r3);
+    try testing.expectEqualStrings("line1\\nline2", r3);
+
+    // Carriage return is escaped in extensions
+    const r4 = try escapeCefString(allocator, "line1\rline2", false);
+    defer allocator.free(r4);
+    try testing.expectEqualStrings("line1\\rline2", r4);
+
+    // Pipe is NOT escaped in extensions
+    const r5 = try escapeCefString(allocator, "val|ue", false);
+    defer allocator.free(r5);
+    try testing.expectEqualStrings("val|ue", r5);
+}
+
+test "escapeCefString: no special characters returns input unchanged" {
+    const testing = std.testing;
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const r1 = try escapeCefString(allocator, "simple text", true);
+    defer allocator.free(r1);
+    try testing.expectEqualStrings("simple text", r1);
+
+    const r2 = try escapeCefString(allocator, "simple text", false);
+    defer allocator.free(r2);
+    try testing.expectEqualStrings("simple text", r2);
+
+    // Empty string
+    const r3 = try escapeCefString(allocator, "", true);
+    defer allocator.free(r3);
+    try testing.expectEqualStrings("", r3);
 }
