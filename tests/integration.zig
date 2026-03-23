@@ -33,7 +33,7 @@ test "integration: auth login success with exact syslog output" {
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer audit_logger.deinit();
 
-    var mock_sender = syslog.MockSyslogSender.init(allocator);
+    var mock_sender = try syslog.MockSyslogSender.init(allocator);
     defer mock_sender.deinit();
 
     const event = events.AuditEvent{

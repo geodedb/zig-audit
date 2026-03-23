@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! CEF v0 (Common Event Format) message formatting.
+//! Encodes audit events into the ArcSight CEF wire format with proper header
+//! and extension escaping.
+
 const std = @import("std");
 const events = @import("events.zig");
 const config = @import("config.zig");

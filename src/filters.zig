@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! Metadata filtering, sensitive-key detection, and PII/PCI data redaction.
+//! Supports configurable allow/deny lists, value-type heuristics, and masking modes.
+
 const std = @import("std");
 const config = @import("config.zig");
 const json_util = @import("json_util.zig");
@@ -453,6 +456,9 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
     if (is_denied or sensitive_token != null) {
         if (value == .string) {
             const str_value = value.string;
+            // NOTE: This condition is currently unreachable because isPemPrivateKey
+            // checks for "-----BEGIN" — it exists as a forward-looking guard for
+            // future PEM detection changes that might not require that prefix.
             if (isPemPrivateKey(str_value) and !std.mem.startsWith(u8, str_value, "-----BEGIN")) {
                 return .drop_event;
             }
@@ -473,4 +479,3 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
 
     return .allow;
 }
-

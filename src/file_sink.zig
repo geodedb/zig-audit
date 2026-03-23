@@ -1,12 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! Rotating file sink for JSON-formatted audit log output.
+//! Supports configurable max size and backup count for log rotation.
+
 const std = @import("std");
 const builtin = @import("builtin");
 const events = @import("events.zig");
 const config = @import("config.zig");
 const json_util = @import("json_util.zig");
 const time = @import("time.zig");
+const log = std.log.scoped(.audit);
 
 pub const FileSink = struct {
     allocator: std.mem.Allocator,
@@ -66,21 +70,11 @@ pub const FileSink = struct {
         var ts_buf: [64]u8 = undefined;
         const timestamp = self.clock.nowRfc3339(&ts_buf);
 
-        // Use std.json for type-safe encoding instead of external json library
-        const ErrorLogJson = struct {
-            ts: []const u8,
-            level: []const u8 = "ERROR",
-            msg: []const u8,
-        };
-        const error_entry = ErrorLogJson{
-            .ts = timestamp,
-            .msg = error_msg,
-        };
         var obj = std.json.ObjectMap.init(self.allocator);
         defer obj.deinit();
-        try obj.put("ts", std.json.Value{ .string = error_entry.ts });
-        try obj.put("level", std.json.Value{ .string = error_entry.level });
-        try obj.put("msg", std.json.Value{ .string = error_entry.msg });
+        try obj.put("ts", std.json.Value{ .string = timestamp });
+        try obj.put("level", std.json.Value{ .string = "ERROR" });
+        try obj.put("msg", std.json.Value{ .string = error_msg });
         const error_obj = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
         defer self.allocator.free(error_obj);
 
@@ -103,7 +97,7 @@ pub const FileSink = struct {
             var iter = json_obj.iterator();
             while (iter.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
-                json_util.freeJsonValue(self.allocator,entry.value_ptr.*);
+                json_util.freeJsonValue(self.allocator, entry.value_ptr.*);
             }
             json_obj.deinit();
         }
@@ -151,10 +145,10 @@ pub const FileSink = struct {
                     // Free any existing entry with the same key to avoid leaks
                     if (json_obj.fetchSwapRemove(entry.key_ptr.*)) |removed| {
                         self.allocator.free(removed.key);
-                        json_util.freeJsonValue(self.allocator,removed.value);
+                        json_util.freeJsonValue(self.allocator, removed.value);
                     }
                     const key = try self.allocator.dupe(u8, entry.key_ptr.*);
-                    const value = try json_util.cloneJsonValue(self.allocator,entry.value_ptr.*);
+                    const value = try json_util.cloneJsonValue(self.allocator, entry.value_ptr.*);
                     try json_obj.put(key, value);
                 }
             }
@@ -184,21 +178,31 @@ pub const FileSink = struct {
             const new_backup_path = try std.fmt.allocPrint(self.allocator, "{s}.{d}", .{ self.config.path, i });
             defer self.allocator.free(new_backup_path);
 
-            std.fs.cwd().rename(old_backup_path, new_backup_path) catch {};
+            std.fs.cwd().rename(old_backup_path, new_backup_path) catch |err| {
+                log.warn("audit file rotation failed: {s}", .{@errorName(err)});
+            };
         }
 
         if (self.config.backup_count > 0) {
             const backup_path = try std.fmt.allocPrint(self.allocator, "{s}.1", .{self.config.path});
             defer self.allocator.free(backup_path);
-            std.fs.cwd().rename(self.config.path, backup_path) catch {};
+            std.fs.cwd().rename(self.config.path, backup_path) catch |err| {
+                log.warn("audit file rotation failed: {s}", .{@errorName(err)});
+            };
         }
 
         try self.openCurrentFile();
     }
 
     fn openCurrentFile(self: *FileSink) !void {
+        if (std.mem.indexOf(u8, self.config.path, "..") != null) {
+            return error.PathTraversalRejected;
+        }
+
         if (std.fs.path.dirname(self.config.path)) |dir_path| {
-            std.fs.cwd().makePath(dir_path) catch {};
+            std.fs.cwd().makePath(dir_path) catch |err| {
+                log.warn("audit file rotation failed: {s}", .{@errorName(err)});
+            };
         }
 
         self.current_file = try std.fs.cwd().createFile(self.config.path, .{ .truncate = false });

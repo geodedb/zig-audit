@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! High-level audit logger that orchestrates event validation, filtering,
+//! redaction, and dispatch to file and syslog sinks.
+
 const std = @import("std");
 const events = @import("events.zig");
 const config = @import("config.zig");
@@ -156,7 +159,6 @@ pub const AuditLogger = struct {
         const value = std.json.Value{ .object = obj };
         return std.json.Stringify.valueAlloc(self.allocator, value, .{});
     }
-
 };
 
 pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: *const config.Config) !*AuditLogger {

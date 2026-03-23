@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! Syslog transport for audit events over UDP, TCP, or TLS.
+//! Formats messages as RFC 5424 with a CEF payload and sends via a background worker.
+
 const std = @import("std");
 const events = @import("events.zig");
 const config = @import("config.zig");
@@ -104,7 +107,7 @@ pub const SyslogSender = struct {
         if (!self.config.enabled) return;
 
         const cef_msg = try cef.formatCef(self.allocator, event, &self.identity, self.clock);
-        const syslog_line = try self.formatRfc5424(event, cef_msg);
+        const syslog_line = try self.formatSyslogLine(event, cef_msg);
         defer self.allocator.free(cef_msg);
 
         self.mutex.lock();
@@ -128,22 +131,8 @@ pub const SyslogSender = struct {
         return self.dropped_count;
     }
 
-    fn formatRfc5424(self: *SyslogSender, event: *const events.AuditEvent, cef_msg: []const u8) ![]const u8 {
-        const facility = self.config.rfc5424.facility.toInt();
-        const severity = event.severity.toSyslogSeverity();
-        const pri = facility * 8 + severity;
-
-        var ts_buf: [64]u8 = undefined;
-        const timestamp = self.clock.nowRfc3339(&ts_buf);
-
-        return std.fmt.allocPrint(self.allocator, "<{d}>1 {s} {s} {s} {d} AUDIT - {s}", .{
-            pri,
-            timestamp,
-            self.service.host,
-            self.service.name,
-            self.service.pid,
-            cef_msg,
-        });
+    fn formatSyslogLine(self: *SyslogSender, event: *const events.AuditEvent, cef_msg: []const u8) ![]const u8 {
+        return formatRfc5424(self.allocator, event, cef_msg, self.service, self.config, self.clock);
     }
 
     fn workerThread(self: *SyslogSender) void {
@@ -229,18 +218,37 @@ pub const SyslogSender = struct {
         log.warn("TLS syslog transport not yet implemented; use stunnel or TCP", .{});
         return error.TlsNotImplemented;
     }
-
 };
+
+/// Format an audit event as an RFC 5424 syslog line with a CEF payload.
+/// Shared implementation used by both SyslogSender and MockSyslogSender.
+pub fn formatRfc5424(allocator: std.mem.Allocator, event: *const events.AuditEvent, cef_msg: []const u8, service: config.ServiceConfig, syslog_cfg: config.SyslogSinkConfig, clock: time.Clock) ![]const u8 {
+    const facility = syslog_cfg.rfc5424.facility.toInt();
+    const severity = event.severity.toSyslogSeverity();
+    const pri = facility * 8 + severity;
+
+    var ts_buf: [64]u8 = undefined;
+    const timestamp = clock.nowRfc3339(&ts_buf);
+
+    return std.fmt.allocPrint(allocator, "<{d}>1 {s} {s} {s} {d} AUDIT - {s}", .{
+        pri,
+        timestamp,
+        service.host,
+        service.name,
+        service.pid,
+        cef_msg,
+    });
+}
 
 pub const MockSyslogSender = struct {
     allocator: std.mem.Allocator,
     captured_messages: std.ArrayList([]const u8),
     mutex: std.Thread.Mutex,
 
-    pub fn init(allocator: std.mem.Allocator) MockSyslogSender {
+    pub fn init(allocator: std.mem.Allocator) !MockSyslogSender {
         return MockSyslogSender{
             .allocator = allocator,
-            .captured_messages = std.ArrayList([]const u8).initCapacity(allocator, 16) catch @panic("MockSyslogSender init failed"),
+            .captured_messages = try std.ArrayList([]const u8).initCapacity(allocator, 16),
             .mutex = std.Thread.Mutex{},
         };
     }
@@ -256,21 +264,7 @@ pub const MockSyslogSender = struct {
         const cef_msg = try cef.formatCef(self.allocator, event, identity, clock);
         defer self.allocator.free(cef_msg);
 
-        const facility = syslog_config.rfc5424.facility.toInt();
-        const severity = event.severity.toSyslogSeverity();
-        const pri = facility * 8 + severity;
-
-        var ts_buf: [64]u8 = undefined;
-        const timestamp = clock.nowRfc3339(&ts_buf);
-
-        const syslog_line = try std.fmt.allocPrint(self.allocator, "<{d}>1 {s} {s} {s} {d} AUDIT - {s}", .{
-            pri,
-            timestamp,
-            service.host,
-            service.name,
-            service.pid,
-            cef_msg,
-        });
+        const syslog_line = try formatRfc5424(self.allocator, event, cef_msg, service.*, syslog_config.*, clock);
 
         self.mutex.lock();
         defer self.mutex.unlock();

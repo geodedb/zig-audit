@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! Clock abstraction and ID generation vtables for audit timestamps and
+//! trace/span/request identifiers. Includes system and fixed (test) implementations.
+
 const std = @import("std");
 
 pub const Clock = struct {
@@ -9,6 +12,7 @@ pub const Clock = struct {
 
     const VTable = struct {
         nowMs: *const fn (context: *anyopaque) i128,
+        /// Note: returns empty string on buffer formatting failure.
         nowRfc3339: *const fn (context: *anyopaque, buf: []u8) []const u8,
     };
 
@@ -97,6 +101,7 @@ pub const IdGen = struct {
     const VTable = struct {
         traceId: *const fn (ptr: *anyopaque, buf: *[32]u8) void,
         spanId: *const fn (ptr: *anyopaque, buf: *[16]u8) void,
+        /// Note: returns empty string on allocation failure.
         requestId: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator) []const u8,
     };
 
@@ -108,6 +113,7 @@ pub const IdGen = struct {
         return self.vtable.spanId(self.context, buf);
     }
 
+    /// Generate a request ID string. Note: returns empty string on allocation failure.
     pub fn requestId(self: IdGen, allocator: std.mem.Allocator) []const u8 {
         return self.vtable.requestId(self.context, allocator);
     }

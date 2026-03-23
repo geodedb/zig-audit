@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! Audit configuration types and JSON config file parsing.
+//! Defines service, sink, filter, and identity configuration structs.
+
 const std = @import("std");
 const root = @import("root.zig");
 

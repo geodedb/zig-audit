@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright (c) 2024-2025 CodePros
 
+//! AuditEvent model, severity/outcome enums, and field validation.
+
 const std = @import("std");
 const json_util = @import("json_util.zig");
 
