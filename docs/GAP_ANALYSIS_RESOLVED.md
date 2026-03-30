@@ -235,6 +235,89 @@ Items closed or dispositioned during the 2026-03-22 extraction.
 - **Evidence:** `examples/basic.zig`, `build.zig`. Commit: df01e98.
 - **Resolved date:** 2026-03-22
 
+### GAP-030: Missing `spice` dependency -- hand-rolled threading instead of proven concurrency library [RESOLVED]
+
+- **Issue:** N/A
+- **Category:** Architecture / Concurrency
+- **Severity:** High
+- **Resolution:**
+  - Added `spice` as a dependency in `build.zig.zon` and wired into `build.zig`
+  - Created `src/channel.zig` with `BoundedChannel(T)` — a thread-safe bounded channel with mutex + condition variable, blocking receive, and close-with-drain semantics
+  - `SyslogSender` now uses `BoundedChannel` instead of `RingBuffer` + external `Mutex` + `should_stop` atomic
+  - `FileSink` now uses `BoundedChannel` with a background worker thread for async I/O
+  - Both sinks dispatch concurrently via independent background worker threads
+  - Spice thread pool available for compute-parallel tasks; I/O workers use channel-based pattern
+- **Evidence:** `build.zig.zon` (spice dependency), `src/channel.zig`, `src/syslog.zig`, `src/file_sink.zig`. 102/102 tests pass.
+- **Resolved date:** 2026-03-30
+
+### GAP-031: Sequential sink dispatch -- no parallel fan-out in logger [RESOLVED]
+
+- **Issue:** N/A
+- **Category:** Performance / Architecture
+- **Severity:** Medium
+- **Resolution:**
+  - Both syslog and file sinks now use `BoundedChannel` + background worker threads
+  - `audit()` method does two fast channel enqueues (microseconds), actual I/O happens on separate worker threads concurrently
+  - Logger now attempts both sinks independently — one sink failure doesn't block the other
+- **Evidence:** `src/logger.zig` (independent error handling for each sink). Both sinks process events concurrently on their own worker threads.
+- **Resolved date:** 2026-03-30
+
+### GAP-032: Syslog worker uses busy-polling with 100ms sleep [RESOLVED]
+
+- **Issue:** N/A
+- **Category:** Performance
+- **Severity:** Medium
+- **Resolution:**
+  - Replaced `std.Thread.sleep(100ms)` polling loop with `BoundedChannel.receive()` which blocks on a condition variable
+  - Worker thread wakes immediately when a message is sent, eliminating the 100ms latency floor
+  - No batch size limit — worker processes each message as it arrives
+  - Throughput limited only by network I/O, not polling interval
+- **Evidence:** `src/syslog.zig:workerThread` — `while (self.ch.receive()) |msg|` blocks until message or close.
+- **Resolved date:** 2026-03-30
+
+### GAP-033: RingBuffer has no internal thread safety -- relies on external mutex discipline [RESOLVED]
+
+- **Issue:** N/A
+- **Category:** Correctness / Concurrency
+- **Severity:** Medium
+- **Resolution:**
+  - `SyslogSender` replaced `RingBuffer` + external `Mutex` with `BoundedChannel` (internal mutex + condition variable)
+  - `FileSink` similarly uses `BoundedChannel` for its write queue
+  - `RingBuffer` documentation updated to explicitly state it is NOT thread-safe and points to `BoundedChannel` for concurrent use
+  - `RingBuffer` retained for non-concurrent use cases (single-threaded batch processing)
+- **Evidence:** `src/syslog.zig` (no `RingBuffer` import), `src/ring_buffer.zig` (doc comment), `src/channel.zig` (BoundedChannel with 7 tests including multi-threaded).
+- **Resolved date:** 2026-03-30
+
+### GAP-034: File sink write blocks the caller thread -- no async I/O path [RESOLVED]
+
+- **Issue:** N/A
+- **Category:** Performance
+- **Severity:** Medium
+- **Resolution:**
+  - `FileSink.write()` now formats JSON on the caller thread, enqueues the formatted string to a `BoundedChannel`, and returns immediately
+  - A dedicated background worker thread consumes from the channel and handles file I/O (write, rotation, fsync)
+  - File mutex removed — only the single background worker accesses the file, eliminating contention
+  - Rotation logic runs on the worker thread, correct by construction (single writer)
+- **Evidence:** `src/file_sink.zig` (channel-based async write path, `workerThread` method). All file sink tests pass.
+- **Resolved date:** 2026-03-30
+
+### GAP-035: No structured shutdown or drain guarantee for background workers [RESOLVED]
+
+- **Issue:** N/A
+- **Category:** Correctness
+- **Severity:** Medium
+- **Resolution:**
+  - Both `SyslogSender.deinit()` and `FileSink.deinit()` implement two-phase shutdown:
+    1. `ch.close()` — stops accepting new messages, signals blocked receivers
+    2. Worker's `receive()` loop drains all remaining messages (sends to network / writes to disk)
+    3. `receive()` returns null when closed AND empty — worker exits
+    4. `thread.join()` — waits for worker to finish draining
+    5. Any remaining messages freed as safety net
+  - `BoundedChannel.close()` + `receive()` provides the drain guarantee: receiver keeps processing until all items consumed
+  - `AuditLogger.deinit()` deinits syslog first (network drain), then file (disk drain)
+- **Evidence:** `src/syslog.zig:deinit`, `src/file_sink.zig:deinit`, `src/channel.zig:close/receive`. Integration tests verify drain behavior.
+- **Resolved date:** 2026-03-30
+
 ## Won't Do
 
 ### GAP-002: Geode DB adapter is mixed into the same package tree [WON'T DO]

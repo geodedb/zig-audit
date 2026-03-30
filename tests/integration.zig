@@ -141,7 +141,6 @@ test "integration: file rotation functionality" {
     test_config.sinks.file.backup_count = 2;
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
-    defer audit_logger.deinit();
 
     var i: u32 = 0;
     while (i < 50) : (i += 1) {
@@ -163,6 +162,9 @@ test "integration: file rotation functionality" {
 
         try audit_logger.audit(&event);
     }
+
+    // deinit drains all queued async writes before closing
+    audit_logger.deinit();
 
     const audit_log = test_dir ++ "/audit.log";
     const backup1 = test_dir ++ "/audit.log.1";

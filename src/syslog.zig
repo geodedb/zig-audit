@@ -48,11 +48,9 @@ pub const SyslogSender = struct {
     service: config.ServiceConfig,
     identity: config.CefIdentityConfig,
     clock: time.Clock,
-    queue: RingBuffer([]const u8),
-    mutex: std.Thread.Mutex,
-    should_stop: std.atomic.Value(bool),
+    ch: BoundedChannel([]const u8),
     thread: ?std.Thread,
-    dropped_count: u64,
+    dropped_count: std.atomic.Value(u64),
 
     // Persistent socket fields (GAP-021 / PERF-010)
     udp_socket: ?std.posix.socket_t = null,
@@ -72,29 +70,29 @@ pub const SyslogSender = struct {
     ) !*SyslogSender {
         const sender = try allocator.create(SyslogSender);
 
+        var ch = try BoundedChannel([]const u8).init(allocator, QUEUE_SIZE);
+
+        if (syslog_config.protocol == .tls) {
+            ch.deinit();
+            allocator.destroy(sender);
+            return error.TlsNotSupported;
+        }
+
         sender.* = SyslogSender{
             .allocator = allocator,
             .config = syslog_config,
             .service = service_config,
             .identity = identity_config,
             .clock = clock,
-            .queue = try RingBuffer([]const u8).init(allocator, QUEUE_SIZE),
-            .mutex = std.Thread.Mutex{},
-            .should_stop = std.atomic.Value(bool).init(false),
+            .ch = ch,
             .thread = null,
-            .dropped_count = 0,
+            .dropped_count = std.atomic.Value(u64).init(0),
             .udp_socket = null,
             .tcp_socket = null,
             .resolved_addr = null,
             .dns_cache_ttl_ms = 300_000,
             .last_dns_resolve_ms = 0,
         };
-
-        if (sender.config.protocol == .tls) {
-            sender.queue.deinit();
-            allocator.destroy(sender);
-            return error.TlsNotSupported;
-        }
 
         if (sender.config.enabled) {
             log.warn("syslog transport using plaintext {s}; use TLS tunnel for encrypted transport", .{@tagName(syslog_config.protocol)});
@@ -105,8 +103,10 @@ pub const SyslogSender = struct {
     }
 
     pub fn deinit(self: *SyslogSender) void {
+        // Close the channel — worker will drain remaining messages then exit
+        self.ch.close();
+
         if (self.thread) |thread| {
-            self.should_stop.store(true, .seq_cst);
             thread.join();
         }
 
@@ -120,10 +120,11 @@ pub const SyslogSender = struct {
             self.tcp_socket = null;
         }
 
-        while (self.queue.pop()) |msg| {
+        // Free any messages left after worker exit (shouldn't happen, but safe)
+        while (self.ch.tryReceive()) |msg| {
             self.allocator.free(msg);
         }
-        self.queue.deinit();
+        self.ch.deinit();
         self.allocator.destroy(self);
     }
 
@@ -134,61 +135,27 @@ pub const SyslogSender = struct {
         const syslog_line = try self.formatSyslogLine(event, cef_msg);
         defer self.allocator.free(cef_msg);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        if (!self.queue.push(syslog_line)) {
-            if (self.dropped_count == 0) {
-                log.warn("syslog queue full; dropping oldest message (ring buffer overflow)", .{});
+        if (!self.ch.trySend(syslog_line)) {
+            const prev = self.dropped_count.fetchAdd(1, .monotonic);
+            if (prev == 0) {
+                log.warn("syslog channel full; dropping message", .{});
             }
-            self.dropped_count += 1;
-            if (self.queue.pop()) |old_msg| {
-                self.allocator.free(old_msg);
-            }
-            _ = self.queue.push(syslog_line);
+            self.allocator.free(syslog_line);
         }
     }
 
     pub fn getDroppedCount(self: *SyslogSender) u64 {
-        self.mutex.lock();
-        defer self.mutex.unlock();
-        return self.dropped_count;
+        return self.dropped_count.load(.monotonic);
     }
 
     fn formatSyslogLine(self: *SyslogSender, event: *const events.AuditEvent, cef_msg: []const u8) ![]const u8 {
         return formatRfc5424(self.allocator, event, cef_msg, self.service, self.config, self.clock);
     }
 
+    /// Background worker: blocks on channel.receive(), sends each message,
+    /// and exits when channel is closed and drained.
     fn workerThread(self: *SyslogSender) void {
-        while (!self.should_stop.load(.seq_cst)) {
-            self.processQueue() catch |err| {
-                log.warn("syslog sender error: {s}", .{@errorName(err)});
-            };
-            std.Thread.sleep(std.time.ns_per_ms * 100);
-        }
-    }
-
-    fn processQueue(self: *SyslogSender) !void {
-        var messages: [32][]const u8 = undefined;
-        var count: usize = 0;
-
-        {
-            self.mutex.lock();
-            defer self.mutex.unlock();
-
-            while (count < messages.len) {
-                if (self.queue.pop()) |msg| {
-                    messages[count] = msg;
-                    count += 1;
-                } else {
-                    break;
-                }
-            }
-        }
-
-        if (count == 0) return;
-
-        for (messages[0..count]) |msg| {
+        while (self.ch.receive()) |msg| {
             defer self.allocator.free(msg);
             self.sendToSyslog(msg) catch |err| {
                 log.warn("failed to send syslog message: {s}", .{@errorName(err)});
@@ -349,8 +316,7 @@ pub const MockSyslogSender = struct {
     }
 };
 
-// RingBuffer extracted to src/ring_buffer.zig (Q16/#36)
-const RingBuffer = @import("ring_buffer.zig").RingBuffer;
+const BoundedChannel = @import("channel.zig").BoundedChannel;
 
 test "SyslogSender.init rejects TLS protocol" {
     const allocator = std.testing.allocator;
@@ -390,32 +356,6 @@ test "TLS config: default values" {
     try std.testing.expect(tls_config.verify_hostname == true);
     try std.testing.expect(tls_config.pool_size == 4);
     try std.testing.expect(tls_config.idle_timeout_ms == 30000);
-}
-
-test "RingBuffer: basic push and pop" {
-    const allocator = std.testing.allocator;
-    var rb = try RingBuffer(u32).init(allocator, 4);
-    defer rb.deinit();
-
-    try std.testing.expect(rb.isEmpty());
-    try std.testing.expect(!rb.isFull());
-
-    try std.testing.expect(rb.push(1));
-    try std.testing.expect(rb.push(2));
-    try std.testing.expect(rb.push(3));
-    try std.testing.expect(rb.push(4));
-
-    try std.testing.expect(rb.isFull());
-    try std.testing.expect(!rb.isEmpty());
-    try std.testing.expect(!rb.push(5));
-
-    try std.testing.expectEqual(@as(u32, 1), rb.pop().?);
-    try std.testing.expectEqual(@as(u32, 2), rb.pop().?);
-    try std.testing.expectEqual(@as(u32, 3), rb.pop().?);
-    try std.testing.expectEqual(@as(u32, 4), rb.pop().?);
-
-    try std.testing.expect(rb.isEmpty());
-    try std.testing.expect(rb.pop() == null);
 }
 
 test "SyslogSender.getDroppedCount starts at zero" {

@@ -10,7 +10,10 @@ const events = @import("events.zig");
 const config = @import("config.zig");
 const json_util = @import("json_util.zig");
 const time = @import("time.zig");
+const BoundedChannel = @import("channel.zig").BoundedChannel;
 const log = std.log.scoped(.audit);
+
+const FILE_QUEUE_SIZE = 10000;
 
 pub const FileSink = struct {
     allocator: std.mem.Allocator,
@@ -19,7 +22,8 @@ pub const FileSink = struct {
     current_file: ?std.fs.File,
     current_size: u64,
     writes_since_sync: u32,
-    mutex: std.Thread.Mutex,
+    ch: BoundedChannel([]const u8),
+    thread: ?std.Thread,
 
     pub fn init(allocator: std.mem.Allocator, file_config: config.FileSinkConfig, clock: time.Clock) !*FileSink {
         const sink = try allocator.create(FileSink);
@@ -30,42 +34,52 @@ pub const FileSink = struct {
             .current_file = null,
             .current_size = 0,
             .writes_since_sync = 0,
-            .mutex = std.Thread.Mutex{},
+            .ch = try BoundedChannel([]const u8).init(allocator, FILE_QUEUE_SIZE),
+            .thread = null,
         };
 
         if (file_config.enabled) {
             try sink.openCurrentFile();
+            sink.thread = try std.Thread.spawn(.{}, workerThread, .{sink});
         }
 
         return sink;
     }
 
     pub fn deinit(self: *FileSink) void {
+        // Close channel — worker drains remaining writes then exits
+        self.ch.close();
+
+        if (self.thread) |thread| {
+            thread.join();
+        }
+
+        // Free any messages left after worker exit
+        while (self.ch.tryReceive()) |msg| {
+            self.allocator.free(msg);
+        }
+        self.ch.deinit();
+
         if (self.current_file) |file| {
             file.close();
         }
         self.allocator.destroy(self);
     }
 
+    /// Enqueue a formatted JSON line for the background worker to write.
+    /// Returns immediately after enqueue — file I/O happens on the worker thread.
     pub fn write(self: *FileSink, event: *const events.AuditEvent, filtered_metadata: ?std.json.Value) !void {
         if (!self.config.enabled) return;
 
         const json_line = try self.formatJsonLine(event, filtered_metadata);
-        defer self.allocator.free(json_line);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
-
-        try self.checkRotation(json_line.len);
-
-        if (self.current_file) |file| {
-            try file.writeAll(json_line);
-            try file.writeAll("\n");
-            self.current_size += json_line.len + 1;
-            try self.maybeFsync(file);
+        if (!self.ch.trySend(json_line)) {
+            log.warn("file sink channel full; dropping audit event", .{});
+            self.allocator.free(json_line);
         }
     }
 
+    /// Enqueue an error message for the background worker to write.
     pub fn writeError(self: *FileSink, error_msg: []const u8) !void {
         if (!self.config.enabled) return;
 
@@ -77,24 +91,40 @@ pub const FileSink = struct {
         try obj.put("ts", std.json.Value{ .string = timestamp });
         try obj.put("level", std.json.Value{ .string = "ERROR" });
         try obj.put("msg", std.json.Value{ .string = error_msg });
-        const error_obj = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
-        defer self.allocator.free(error_obj);
+        const error_line = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        if (!self.ch.trySend(error_line)) {
+            log.warn("file sink channel full; dropping error message", .{});
+            self.allocator.free(error_line);
+        }
+    }
 
-        try self.checkRotation(error_obj.len);
+    /// Background worker: receives formatted lines from the channel and writes
+    /// them to the file. Handles rotation and fsync. Exits when channel is
+    /// closed and fully drained.
+    fn workerThread(self: *FileSink) void {
+        while (self.ch.receive()) |line| {
+            defer self.allocator.free(line);
+            self.writeLine(line) catch |err| {
+                log.warn("file sink write error: {s}", .{@errorName(err)});
+            };
+        }
+    }
+
+    /// Write a single line to the current file, handling rotation and fsync.
+    /// Called only from the worker thread — no mutex needed.
+    fn writeLine(self: *FileSink, line: []const u8) !void {
+        try self.checkRotation(line.len);
 
         if (self.current_file) |file| {
-            try file.writeAll(error_obj);
+            try file.writeAll(line);
             try file.writeAll("\n");
-            self.current_size += error_obj.len + 1;
+            self.current_size += line.len + 1;
             try self.maybeFsync(file);
         }
     }
 
-    /// Perform fsync based on the configured sync_mode. Must be called while
-    /// the mutex is held.
+    /// Perform fsync based on the configured sync_mode.
     fn maybeFsync(self: *FileSink, file: std.fs.File) !void {
         switch (self.config.sync_mode) {
             .per_event => try file.sync(),
@@ -265,7 +295,6 @@ test "file sink rotation" {
     };
 
     const sink = try FileSink.init(allocator, file_config, clock);
-    defer sink.deinit();
 
     var i: u32 = 0;
     while (i < 50) : (i += 1) {
@@ -288,6 +317,9 @@ test "file sink rotation" {
         try sink.write(&event, null);
     }
 
+    // deinit drains all queued writes to disk before closing
+    sink.deinit();
+
     const backup1_path = test_dir ++ "/audit.log.1";
     const backup1_exists = blk: {
         std.fs.cwd().access(backup1_path, .{}) catch break :blk false;
@@ -308,7 +340,7 @@ test "FileSink sync_mode per_event is default" {
     try testing.expectEqual(@as(u32, 100), file_config.sync_interval);
 }
 
-test "FileSink sync_mode none skips fsync" {
+test "FileSink sync_mode none writes to file" {
     const testing = std.testing;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -330,7 +362,6 @@ test "FileSink sync_mode none skips fsync" {
     };
 
     const sink = try FileSink.init(allocator, file_config, clock);
-    defer sink.deinit();
 
     const event = events.AuditEvent{
         .category = "test",
@@ -348,14 +379,19 @@ test "FileSink sync_mode none skips fsync" {
         .metadata = null,
     };
 
-    // Write should succeed even with sync_mode = .none
     try sink.write(&event, null);
 
-    // writes_since_sync stays at 0 because .none never increments it
-    try testing.expectEqual(@as(u32, 0), sink.writes_since_sync);
+    // deinit drains writes to disk
+    sink.deinit();
+
+    // Verify file has content
+    const file = try std.fs.cwd().openFile(test_dir ++ "/audit.log", .{});
+    defer file.close();
+    const stat = try file.stat();
+    try testing.expect(stat.size > 0);
 }
 
-test "FileSink sync_mode periodic increments counter" {
+test "FileSink sync_mode periodic writes to file" {
     const testing = std.testing;
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -378,7 +414,6 @@ test "FileSink sync_mode periodic increments counter" {
     };
 
     const sink = try FileSink.init(allocator, file_config, clock);
-    defer sink.deinit();
 
     const event = events.AuditEvent{
         .category = "test",
@@ -396,20 +431,24 @@ test "FileSink sync_mode periodic increments counter" {
         .metadata = null,
     };
 
-    // Write 3 events -- counter should be at 3 (interval is 5)
-    try sink.write(&event, null);
-    try sink.write(&event, null);
-    try sink.write(&event, null);
-    try testing.expectEqual(@as(u32, 3), sink.writes_since_sync);
+    // Write 6 events (interval=5, so fsync fires once at event 5)
+    var i: u32 = 0;
+    while (i < 6) : (i += 1) {
+        try sink.write(&event, null);
+    }
 
-    // Write 2 more -- counter hits 5, fsync fires, counter resets to 0
-    try sink.write(&event, null);
-    try sink.write(&event, null);
-    try testing.expectEqual(@as(u32, 0), sink.writes_since_sync);
+    // deinit drains all queued writes
+    sink.deinit();
 
-    // Write 1 more -- counter goes to 1
-    try sink.write(&event, null);
-    try testing.expectEqual(@as(u32, 1), sink.writes_since_sync);
+    // Verify all 6 events written (each event is a JSON line)
+    const content = try std.fs.cwd().readFileAlloc(allocator, test_dir ++ "/audit.log", 1048576);
+    defer allocator.free(content);
+    var line_count: u32 = 0;
+    var iter = std.mem.splitScalar(u8, content, '\n');
+    while (iter.next()) |line| {
+        if (line.len > 0) line_count += 1;
+    }
+    try testing.expectEqual(@as(u32, 6), line_count);
 }
 
 test "SyncMode.fromString parses valid modes" {

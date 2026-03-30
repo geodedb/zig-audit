@@ -14,6 +14,13 @@ pub fn build(b: *std.Build) void {
     });
     const dns_mod = dns_dep.module("dns");
 
+    // External dependency: Spice thread pool for structured concurrency
+    const spice_dep = b.dependency("spice", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const spice_mod = spice_dep.module("spice");
+
     // Main library module
     const module = b.addModule("audit", .{
         .root_source_file = b.path("src/root.zig"),
@@ -21,6 +28,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     module.addImport("dns", dns_mod);
+    module.addImport("spice", spice_mod);
 
     // Unit tests (run tests defined in the module itself)
     const test_step = b.step("test", "Run unit tests");
@@ -31,6 +39,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "dns", .module = dns_mod },
+                .{ .name = "spice", .module = spice_mod },
             },
         }),
     });
@@ -130,8 +139,66 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "dns", .module = dns_mod },
+                .{ .name = "spice", .module = spice_mod },
             },
         }),
     });
     check_step.dependOn(&check.step);
+
+    // ── Benchmarks ─────────────────────────────────────────────────────────
+
+    // Basic micro-benchmarks
+    const bench_step = b.step("bench", "Run performance micro-benchmarks");
+    const bench = b.addExecutable(.{
+        .name = "bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "audit", .module = module },
+            },
+        }),
+    });
+    const run_bench = b.addRunArtifact(bench);
+    bench_step.dependOn(&run_bench.step);
+
+    // Incremental scale benchmark (JSON output to stdout)
+    const scale_bench_step = b.step("scale-bench", "Run incremental scale benchmark");
+    const scale_bench = b.addExecutable(.{
+        .name = "scale-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/scale_bench.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "audit", .module = module },
+            },
+        }),
+    });
+    if (b.args) |args| {
+        const run_scale = b.addRunArtifact(scale_bench);
+        run_scale.addArgs(args);
+        scale_bench_step.dependOn(&run_scale.step);
+    } else {
+        const run_scale = b.addRunArtifact(scale_bench);
+        scale_bench_step.dependOn(&run_scale.step);
+    }
+    b.installArtifact(scale_bench);
+
+    // Benchmark comparison tool
+    const compare_step = b.step("compare-bench", "Compare benchmark results against baseline");
+    const compare = b.addExecutable(.{
+        .name = "compare-bench",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/compare.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+        }),
+    });
+    const run_compare = b.addRunArtifact(compare);
+    if (b.args) |args| {
+        run_compare.addArgs(args);
+    }
+    compare_step.dependOn(&run_compare.step);
 }

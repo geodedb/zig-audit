@@ -135,14 +135,26 @@ pub const AuditLogger = struct {
             event.metadata = std.json.Value{ .object = truncation_obj };
         }
 
-        // Send to sinks
+        // Fan out to sinks concurrently — both sinks use background workers
+        // consuming from BoundedChannels, so these calls just format and enqueue.
+        // Attempt both sinks independently so one failure doesn't block the other.
+        var syslog_err: ?anyerror = null;
         if (self.syslog_sender) |sender| {
-            try sender.send(&event);
+            sender.send(&event) catch |err| {
+                syslog_err = err;
+            };
         }
 
+        var file_err: ?anyerror = null;
         if (self.file_sink) |sink| {
-            try sink.write(&event, event.metadata);
+            sink.write(&event, event.metadata) catch |err| {
+                file_err = err;
+            };
         }
+
+        // Propagate errors: prefer syslog error since it likely indicates OOM
+        if (syslog_err) |err| return err;
+        if (file_err) |err| return err;
     }
 
     /// Estimate the serialized JSON size of an audit event without building a

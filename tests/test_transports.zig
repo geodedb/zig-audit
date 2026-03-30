@@ -175,7 +175,6 @@ test "file rotation" {
     };
 
     const sink = try file_sink.FileSink.init(allocator, file_config, clock);
-    defer sink.deinit();
 
     var i: u32 = 0;
     while (i < 20) : (i += 1) {
@@ -197,6 +196,9 @@ test "file rotation" {
 
         try sink.write(&event, null);
     }
+
+    // deinit drains all queued writes to disk before closing
+    sink.deinit();
 
     const file_exists = blk: {
         std.fs.cwd().access(test_dir ++ "/rotate.log", .{}) catch break :blk false;

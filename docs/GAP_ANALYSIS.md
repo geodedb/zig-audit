@@ -1,8 +1,8 @@
 # GAP Analysis
 
-Last updated: 2026-03-22
+Last updated: 2026-03-30
 
-Repository status: core audit modules extracted from Geode; all unit and integration tests passing (81/81).
+Repository status: core audit modules extracted from Geode; all unit and integration tests passing (102/102).
 
 ## Goal
 
@@ -107,7 +107,7 @@ Keep in Geode:
 
 ## Resolved Gaps
 
-All resolved gaps (21 items) have been moved to [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
+All resolved gaps (27 items) have been moved to [GAP_ANALYSIS_RESOLVED.md](GAP_ANALYSIS_RESOLVED.md).
 
 ## Tests And Benchmarks Carried Over
 
@@ -135,6 +135,7 @@ Exported from `src/root.zig`:
 - `Clock`, `SystemClock`, `FixedClock` (time)
 - `IdGen`, `SystemIdGen`, `FixedIdGen` (time)
 - `formatCef`, `escapeCefString` (cef)
+- `BoundedChannel` (channel)
 
 ## Acceptance Criteria
 

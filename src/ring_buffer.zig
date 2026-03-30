@@ -3,8 +3,13 @@
 
 //! Generic fixed-capacity ring buffer (circular queue).
 //!
-//! Used by the syslog transport for bounded async message queuing,
-//! but extracted here so other modules can reuse it.
+//! **NOT thread-safe.** This data structure has no internal synchronization.
+//! For thread-safe producer-consumer queuing, use `channel.BoundedChannel`
+//! which provides mutex + condition variable, blocking receive, and
+//! close-with-drain semantics.
+//!
+//! This ring buffer is suitable for single-threaded batch processing or
+//! cases where the caller manages external synchronization.
 
 const std = @import("std");
 

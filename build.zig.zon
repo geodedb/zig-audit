@@ -8,11 +8,16 @@
             .url = "git+https://gitlab.com/devnw/zig/dns.git#394883190e2b0eab326b8a12f78f8a2a971518c7",
             .hash = "dns-0.1.0-x4U-zalRDAB_AzP3BWzD_pFniX_3vYu6MNffJgv7uYPg",
         },
+        .spice = .{
+            .url = "git+https://gitlab.com/devnw/zig/spice.git#bbf106dc8131a514a4d1687cc2173f124f5c8181",
+            .hash = "spice-0.0.0-HnDb58jJAACojBd1dquGT-Ngc6TORlC6izlAKf0f4Rno",
+        },
     },
     .paths = .{
         "build.zig",
         "build.zig.zon",
         "src",
+        "benchmarks",
         "LICENSE",
         "README.md",
     },

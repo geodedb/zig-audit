@@ -47,6 +47,7 @@ pub const cef = @import("cef.zig");
 pub const json_util = @import("json_util.zig");
 pub const logger = @import("logger.zig");
 pub const ring_buffer = @import("ring_buffer.zig");
+pub const channel = @import("channel.zig");
 
 // ── Convenience re-exports ──────────────────────────────────────────────
 
@@ -61,6 +62,7 @@ pub const Clock = time.Clock;
 pub const IdGen = time.IdGen;
 pub const formatCef = cef.formatCef;
 pub const RingBuffer = ring_buffer.RingBuffer;
+pub const BoundedChannel = channel.BoundedChannel;
 
 // ── Tests ───────────────────────────────────────────────────────────────
 
