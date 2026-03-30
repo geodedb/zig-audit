@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "timestamp": "2026-03-30T16:57:42Z",
+  "git_commit": "unknown",
+  "system": { "os": "linux", "arch": "x86_64" },
+  "tiers": [
+    {
+      "name": "100",
+      "event_count": 100,
+      "logger_ops_sec": 3178,
+      "channel_ops_sec": 846711,
+      "validate_ns": 0.3,
+      "clone_ns": 55362.7,
+      "cef_format_ns": 132085.3,
+      "filter_redact_ns": 94722.7,
+      "file_sink_ns": 248760.6,
+      "mixed_ops_sec": 18205
+    },
+    {
+      "name": "1K",
+      "event_count": 1000,
+      "logger_ops_sec": 3028,
+      "channel_ops_sec": 9555753,
+      "validate_ns": 0.0,
+      "clone_ns": 59198.8,
+      "cef_format_ns": 148096.9,
+      "filter_redact_ns": 106296.4,
+      "file_sink_ns": 270393.6,
+      "mixed_ops_sec": 14885
+    },
+    {
+      "name": "10K",
+      "event_count": 10000,
+      "logger_ops_sec": 3004,
+      "channel_ops_sec": 16146090,
+      "validate_ns": 0.0,
+      "clone_ns": 61738.8,
+      "cef_format_ns": 146999.9,
+      "filter_redact_ns": 104280.3,
+      "file_sink_ns": 257884.6,
+      "mixed_ops_sec": 15404
+    },
+    {
+      "name": "50K",
+      "event_count": 50000,
+      "logger_ops_sec": 3024,
+      "channel_ops_sec": 14726161,
+      "validate_ns": 0.0,
+      "clone_ns": 62338.5,
+      "cef_format_ns": 146989.5,
+      "filter_redact_ns": 104704.7,
+      "file_sink_ns": 267670.5,
+      "mixed_ops_sec": 15074
+    },
+    {
+      "name": "100K",
+      "event_count": 100000,
+      "logger_ops_sec": 2918,
+      "channel_ops_sec": 19511285,
+      "validate_ns": 0.0,
+      "clone_ns": 61162.6,
+      "cef_format_ns": 146560.6,
+      "filter_redact_ns": 104994.3,
+      "file_sink_ns": 267518.7,
+      "mixed_ops_sec": 15054
+    },
+    {
+      "name": "500K",
+      "event_count": 500000,
+      "logger_ops_sec": 3005,
+      "channel_ops_sec": 16076817,
+      "validate_ns": 0.0,
+      "clone_ns": 62498.3,
+      "cef_format_ns": 150724.3,
+      "filter_redact_ns": 106524.2,
+      "file_sink_ns": 268359.7,
+      "mixed_ops_sec": 15118
+    }
+  ]
+}

@@ -5,6 +5,7 @@
 .PHONY: all build test test-unit test-integration clean check fmt help dev ci
 .PHONY: test-release-safe test-release-fast test-release-small test-all-optimizations
 .PHONY: pre-commit-install pre-commit pre-commit-run
+.PHONY: bench scale-bench bench-save bench-compare bench-baseline
 
 # Default target: build and run tests
 all: build test-unit
@@ -42,7 +43,7 @@ check:
 # Format source code
 fmt:
 	@echo "📝 Formatting code..."
-	@zig fmt src/ tests/ build.zig
+	@zig fmt src/ tests/ benchmarks/ build.zig
 
 # Quick development iteration loop
 dev: fmt check test-unit
@@ -67,6 +68,34 @@ test-release-small:
 
 test-all-optimizations: test-unit test-release-safe test-release-fast test-release-small
 	@echo "✅ All optimization levels passed"
+
+# Performance benchmarks
+bench:
+	@echo "Running micro-benchmarks..."
+	@zig build bench
+
+# Incremental scale benchmark
+scale-bench:
+	@echo "Running incremental scale benchmark..."
+	@zig build scale-bench 2>/dev/null
+
+# Run scale bench and save results
+bench-save:
+	@echo "Running scale benchmark and saving results..."
+	@zig build scale-bench 2>/dev/null > benchmarks/results/$$(git rev-parse --short HEAD).json
+	@echo "Saved to benchmarks/results/$$(git rev-parse --short HEAD).json"
+
+# Compare current results against baseline
+bench-compare:
+	@echo "Running scale benchmark and comparing against baseline..."
+	@zig build scale-bench 2>/dev/null > /tmp/current-audit-bench.json
+	@zig build compare-bench -- benchmarks/results/baseline.json /tmp/current-audit-bench.json
+
+# Save current results as baseline
+bench-baseline:
+	@echo "Running scale benchmark and saving as baseline..."
+	@zig build scale-bench 2>/dev/null > benchmarks/results/baseline.json
+	@echo "Saved to benchmarks/results/baseline.json"
 
 # Pre-commit hook management
 pre-commit-install:
@@ -101,6 +130,13 @@ help:
 	@echo "  test-release-fast    Test with ReleaseFast"
 	@echo "  test-release-small   Test with ReleaseSmall"
 	@echo "  test-all-optimizations  Test all optimization levels"
+	@echo ""
+	@echo "Benchmarks:"
+	@echo "  bench                Run performance micro-benchmarks"
+	@echo "  scale-bench          Run incremental scale benchmark"
+	@echo "  bench-save           Run scale bench and save results"
+	@echo "  bench-baseline       Save current results as baseline"
+	@echo "  bench-compare        Compare current against baseline"
 	@echo ""
 	@echo "Code Quality:"
 	@echo "  fmt                  Format source code"
