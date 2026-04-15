@@ -14,13 +14,6 @@ pub fn build(b: *std.Build) void {
     });
     const dns_mod = dns_dep.module("dns");
 
-    // External dependency: Spice thread pool for structured concurrency
-    const spice_dep = b.dependency("spice", .{
-        .target = target,
-        .optimize = optimize,
-    });
-    const spice_mod = spice_dep.module("spice");
-
     // Main library module
     const module = b.addModule("audit", .{
         .root_source_file = b.path("src/root.zig"),
@@ -28,7 +21,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     module.addImport("dns", dns_mod);
-    module.addImport("spice", spice_mod);
 
     // Unit tests (run tests defined in the module itself)
     const test_step = b.step("test", "Run unit tests");
@@ -39,7 +31,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "dns", .module = dns_mod },
-                .{ .name = "spice", .module = spice_mod },
             },
         }),
     });
@@ -139,7 +130,6 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "dns", .module = dns_mod },
-                .{ .name = "spice", .module = spice_mod },
             },
         }),
     });
