@@ -9,6 +9,7 @@ const events = @import("events.zig");
 const config = @import("config.zig");
 const cef = @import("cef.zig");
 const time = @import("time.zig");
+const sync = @import("sync.zig");
 
 // Use std.log instead of Geode's logging wrapper
 const log = std.log.scoped(.audit);
@@ -18,10 +19,33 @@ const dns = @import("dns");
 
 const QUEUE_SIZE = 10000;
 
+const linux = std.os.linux;
+
+/// Small IPv4 address representation — replaces the removed `std.net.Address`
+/// for the UDP/TCP socket code below. `bytes` are in network byte order but
+/// stored as a 4-tuple ; `port` is native endian and converted on use.
+pub const Ip4Addr = struct {
+    bytes: [4]u8,
+    port: u16,
+
+    pub fn eqlData(a: Ip4Addr, b: Ip4Addr) bool {
+        return a.port == b.port and std.mem.eql(u8, &a.bytes, &b.bytes);
+    }
+
+    /// Produce a Linux `sockaddr.in` struct ready to hand to sendto/connect.
+    pub fn toSockaddrIn(self: Ip4Addr) linux.sockaddr.in {
+        return .{
+            .family = linux.AF.INET,
+            .port = std.mem.nativeToBig(u16, self.port),
+            .addr = @bitCast(self.bytes),
+        };
+    }
+};
+
 /// Resolve a hostname to an IPv4 address using the external DNS library.
-/// Falls back to std.net.Address.parseIp4 if the host is already an IP address.
-fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u16) !std.net.Address {
-    if (std.net.Address.parseIp4(host, port)) |addr| {
+/// Falls back to parseLiteral if the host is already an IP address.
+fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u16) !Ip4Addr {
+    if (parseIp4(host, port)) |addr| {
         return addr;
     } else |_| {
         var client = dns.Client.init(allocator) catch {
@@ -35,11 +59,39 @@ fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u1
         defer result.deinit(allocator);
 
         if (result.addresses.len > 0) {
-            return std.net.Address.parseIp4(result.addresses[0], port) catch error.InvalidAddress;
+            return parseIp4(result.addresses[0], port) catch error.InvalidAddress;
         }
 
         return error.NoAddressFound;
     }
+}
+
+/// Parse a dotted-quad IPv4 literal like "203.0.113.5" into `Ip4Addr`.
+fn parseIp4(buf: []const u8, port: u16) !Ip4Addr {
+    var bytes: [4]u8 = .{ 0, 0, 0, 0 };
+    var part: usize = 0;
+    var seen_digit = false;
+    var current: u32 = 0;
+    for (buf) |c| {
+        if (c == '.') {
+            if (!seen_digit) return error.InvalidAddress;
+            if (part >= 3) return error.InvalidAddress;
+            if (current > 255) return error.InvalidAddress;
+            bytes[part] = @intCast(current);
+            part += 1;
+            current = 0;
+            seen_digit = false;
+        } else if (c >= '0' and c <= '9') {
+            current = current * 10 + (c - '0');
+            if (current > 255) return error.InvalidAddress;
+            seen_digit = true;
+        } else {
+            return error.InvalidAddress;
+        }
+    }
+    if (!seen_digit or part != 3) return error.InvalidAddress;
+    bytes[3] = @intCast(current);
+    return Ip4Addr{ .bytes = bytes, .port = port };
 }
 
 pub const SyslogSender = struct {
@@ -52,12 +104,12 @@ pub const SyslogSender = struct {
     thread: ?std.Thread,
     dropped_count: std.atomic.Value(u64),
 
-    // Persistent socket fields (GAP-021 / PERF-010)
-    udp_socket: ?std.posix.socket_t = null,
-    tcp_socket: ?std.posix.socket_t = null,
+    // Persistent socket fields (GAP-021 / PERF-010) — raw Linux fd
+    udp_socket: ?i32 = null,
+    tcp_socket: ?i32 = null,
 
     // DNS cache fields (PERF-006)
-    resolved_addr: ?std.net.Address = null,
+    resolved_addr: ?Ip4Addr = null,
     dns_cache_ttl_ms: u32 = 300_000, // 5 minutes
     last_dns_resolve_ms: i64 = 0,
 
@@ -112,11 +164,11 @@ pub const SyslogSender = struct {
 
         // Close persistent sockets
         if (self.udp_socket) |sock| {
-            std.posix.close(sock);
+            _ = linux.close(sock);
             self.udp_socket = null;
         }
         if (self.tcp_socket) |sock| {
-            std.posix.close(sock);
+            _ = linux.close(sock);
             self.tcp_socket = null;
         }
 
@@ -176,7 +228,7 @@ pub const SyslogSender = struct {
     }
 
     /// Resolve or return the cached address, re-resolving when the DNS TTL expires.
-    fn resolveOrCached(self: *SyslogSender) !std.net.Address {
+    fn resolveOrCached(self: *SyslogSender) !Ip4Addr {
         const now_i128 = self.clock.nowMs();
         // Safe truncation: millisecond timestamps fit in i64 for the foreseeable future
         const now_ms: i64 = @intCast(now_i128);
@@ -190,30 +242,65 @@ pub const SyslogSender = struct {
         return addr;
     }
 
+    fn checkErrno(rc: usize) !void {
+        const err = std.posix.errno(rc);
+        if (err != .SUCCESS) {
+            log.debug("syslog syscall errno: {s}", .{@tagName(err)});
+            return error.SyscallFailed;
+        }
+    }
+
+    fn rawSocket(domain: u32, socket_type: u32, protocol: u32) !i32 {
+        const rc = linux.socket(domain, socket_type, protocol);
+        try checkErrno(rc);
+        return @intCast(rc);
+    }
+
     fn sendUdp(self: *SyslogSender, message: []const u8) !void {
         // Create socket on first use, reuse thereafter
         if (self.udp_socket == null) {
-            self.udp_socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0);
+            self.udp_socket = try rawSocket(linux.AF.INET, linux.SOCK.DGRAM, 0);
         }
         const socket = self.udp_socket.?;
 
         const addr = try self.resolveOrCached();
-        _ = try std.posix.sendto(socket, message, 0, &addr.any, addr.getOsSockLen());
+        const sa = addr.toSockaddrIn();
+        const rc = linux.sendto(
+            socket,
+            message.ptr,
+            message.len,
+            0,
+            @ptrCast(&sa),
+            @sizeOf(linux.sockaddr.in),
+        );
+        try checkErrno(rc);
     }
 
     fn sendTcp(self: *SyslogSender, message: []const u8) !void {
         // Create and connect socket on first use, reuse thereafter
         if (self.tcp_socket == null) {
-            const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.STREAM, 0);
-            errdefer std.posix.close(socket);
+            const socket = try rawSocket(linux.AF.INET, linux.SOCK.STREAM, 0);
+            errdefer _ = linux.close(socket);
 
             // Set a 5-second send timeout to avoid blocking indefinitely on
             // unresponsive peers.
-            const timeout = std.posix.timeval{ .sec = 5, .usec = 0 };
-            std.posix.setsockopt(socket, std.posix.SOL.SOCKET, std.posix.SO.SNDTIMEO, std.mem.asBytes(&timeout)) catch {};
+            const timeout = linux.timeval{ .sec = 5, .usec = 0 };
+            _ = linux.setsockopt(
+                socket,
+                linux.SOL.SOCKET,
+                linux.SO.SNDTIMEO,
+                @ptrCast(&timeout),
+                @sizeOf(linux.timeval),
+            );
 
             const addr = try self.resolveOrCached();
-            try std.posix.connect(socket, &addr.any, addr.getOsSockLen());
+            const sa = addr.toSockaddrIn();
+            const rc = linux.connect(
+                socket,
+                @ptrCast(&sa),
+                @sizeOf(linux.sockaddr.in),
+            );
+            try checkErrno(rc);
 
             self.tcp_socket = socket;
         }
@@ -222,14 +309,16 @@ pub const SyslogSender = struct {
         const length_prefix = try std.fmt.allocPrint(self.allocator, "{d} ", .{message.len});
         defer self.allocator.free(length_prefix);
 
-        _ = std.posix.send(socket, length_prefix, 0) catch |err| {
-            // On send error, close socket so it reconnects on next attempt
-            std.posix.close(socket);
+        // Use sendto with NULL addr as a raw "send" equivalent on Linux.
+        const rc1 = linux.sendto(socket, length_prefix.ptr, length_prefix.len, 0, null, 0);
+        checkErrno(rc1) catch |err| {
+            _ = linux.close(socket);
             self.tcp_socket = null;
             return err;
         };
-        _ = std.posix.send(socket, message, 0) catch |err| {
-            std.posix.close(socket);
+        const rc2 = linux.sendto(socket, message.ptr, message.len, 0, null, 0);
+        checkErrno(rc2) catch |err| {
+            _ = linux.close(socket);
             self.tcp_socket = null;
             return err;
         };
@@ -272,13 +361,13 @@ pub fn formatRfc5424(allocator: std.mem.Allocator, event: *const events.AuditEve
 pub const MockSyslogSender = struct {
     allocator: std.mem.Allocator,
     captured_messages: std.ArrayList([]const u8),
-    mutex: std.Thread.Mutex,
+    mutex: sync.Mutex,
 
     pub fn init(allocator: std.mem.Allocator) !MockSyslogSender {
         return MockSyslogSender{
             .allocator = allocator,
             .captured_messages = try std.ArrayList([]const u8).initCapacity(allocator, 16),
-            .mutex = std.Thread.Mutex{},
+            .mutex = .{},
         };
     }
 
@@ -461,7 +550,9 @@ test "SyslogSender deinit closes persistent sockets safely" {
     const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
 
     // Manually create a UDP socket to verify deinit closes it
-    sender.udp_socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0);
+    const rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+    try std.testing.expect(std.posix.errno(rc) == .SUCCESS);
+    sender.udp_socket = @intCast(rc);
 
     // deinit should close it without error
     sender.deinit();
@@ -504,7 +595,7 @@ test "SyslogSender resolveOrCached caches address" {
 
     // Second call returns cached (same address)
     const addr2 = try sender.resolveOrCached();
-    try std.testing.expectEqual(addr1.any.data, addr2.any.data);
+    try std.testing.expect(addr1.eqlData(addr2));
 }
 
 test "SyslogSender resolveOrCached re-resolves after TTL" {

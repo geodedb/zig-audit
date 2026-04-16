@@ -26,6 +26,17 @@ const json_util = audit.json_util;
 
 const print = std.debug.print;
 
+inline fn nowNs() u64 {
+    const io_inst = std.Io.Threaded.global_single_threaded.io();
+    const ts = std.Io.Clock.Timestamp.now(io_inst, .awake);
+    return @intCast(ts.raw.toNanoseconds());
+}
+
+inline fn timeSec() i64 {
+    const io_inst = std.Io.Threaded.global_single_threaded.io();
+    return std.Io.Clock.Timestamp.now(io_inst, .real).raw.toSeconds();
+}
+
 // ---------------------------------------------------------------------------
 // Scale tier definitions — event counts at each level
 // ---------------------------------------------------------------------------
@@ -90,7 +101,7 @@ fn makeEvent() AuditEvent {
 }
 
 fn makeMetadata(allocator: std.mem.Allocator, field_count: usize) !std.json.Value {
-    var obj = std.json.ObjectMap.init(allocator);
+    var obj: std.json.ObjectMap = .empty;
     const fields = [_]struct { key: []const u8, val: []const u8 }{
         .{ .key = "username", .val = "john.doe@example.com" },
         .{ .key = "department", .val = "Engineering" },
@@ -106,7 +117,7 @@ fn makeMetadata(allocator: std.mem.Allocator, field_count: usize) !std.json.Valu
 
     const n = @min(field_count, fields.len);
     for (fields[0..n]) |f| {
-        try obj.put(f.key, std.json.Value{ .string = f.val });
+        try obj.put(allocator, f.key, std.json.Value{ .string = f.val });
     }
     return std.json.Value{ .object = obj };
 }
@@ -120,27 +131,27 @@ const TIER_TIMEOUT_NS: u64 = 10 * 60 * std.time.ns_per_s;
 
 fn benchValidate(iterations: usize) f64 {
     const event = makeEvent();
-    var timer = std.time.Timer.start() catch return 0;
+    const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
         event.validate() catch {};
     }
 
-    const ns_f: f64 = @floatFromInt(timer.read());
+    const ns_f: f64 = @floatFromInt(nowNs() - timer_start);
     const count_f: f64 = @floatFromInt(iterations);
     return ns_f / count_f;
 }
 
 fn benchClone(allocator: std.mem.Allocator, iterations: usize) f64 {
     const event = makeEvent();
-    var timer = std.time.Timer.start() catch return 0;
+    const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
         var cloned = event.clone(allocator) catch continue;
         cloned.freeCloned(allocator);
     }
 
-    const ns_f: f64 = @floatFromInt(timer.read());
+    const ns_f: f64 = @floatFromInt(nowNs() - timer_start);
     const count_f: f64 = @floatFromInt(iterations);
     return ns_f / count_f;
 }
@@ -155,14 +166,14 @@ fn benchCefFormat(allocator: std.mem.Allocator, iterations: usize) f64 {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     const clock = fixed_clock.clock();
 
-    var timer = std.time.Timer.start() catch return 0;
+    const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
         const msg = cef.formatCef(allocator, &event, &identity, clock) catch continue;
         allocator.free(msg);
     }
 
-    const ns_f: f64 = @floatFromInt(timer.read());
+    const ns_f: f64 = @floatFromInt(nowNs() - timer_start);
     const count_f: f64 = @floatFromInt(iterations);
     return ns_f / count_f;
 }
@@ -171,7 +182,7 @@ fn benchFilterRedact(allocator: std.mem.Allocator, iterations: usize, field_coun
     const metadata = makeMetadata(allocator, field_count) catch return 0;
     defer {
         var m = metadata;
-        if (m == .object) m.object.deinit();
+        if (m == .object) m.object.deinit(allocator);
     }
 
     var filters_cfg = config.FiltersConfig{
@@ -182,7 +193,7 @@ fn benchFilterRedact(allocator: std.mem.Allocator, iterations: usize, field_coun
         .pci_mode = true,
     };
 
-    var timer = std.time.Timer.start() catch return 0;
+    const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
         const result = filters.filterAndRedactMetadata(allocator, metadata, &filters_cfg) catch continue;
@@ -191,15 +202,17 @@ fn benchFilterRedact(allocator: std.mem.Allocator, iterations: usize, field_coun
         }
     }
 
-    const ns_f: f64 = @floatFromInt(timer.read());
+    const ns_f: f64 = @floatFromInt(nowNs() - timer_start);
     const count_f: f64 = @floatFromInt(iterations);
     return ns_f / count_f;
 }
 
 fn benchFileSink(allocator: std.mem.Allocator, iterations: usize) f64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
     const test_dir = "zig-out/tmp/scale-bench-file";
-    std.fs.cwd().makePath(test_dir) catch return 0;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch return 0;
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -214,16 +227,13 @@ fn benchFileSink(allocator: std.mem.Allocator, iterations: usize) f64 {
 
     const event = makeEvent();
 
-    var timer = std.time.Timer.start() catch {
-        sink.deinit();
-        return 0;
-    };
+    const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
         sink.write(&event, null) catch {};
     }
 
-    const elapsed = timer.read();
+    const elapsed = nowNs() - timer_start;
     sink.deinit(); // drains
 
     const ns_f: f64 = @floatFromInt(elapsed);
@@ -235,7 +245,7 @@ fn benchChannel(allocator: std.mem.Allocator, iterations: usize) f64 {
     var ch = BoundedChannel(u64).init(allocator, 4096) catch return 0;
     defer ch.deinit();
 
-    var timer = std.time.Timer.start() catch return 0;
+    const timer_start: u64 = nowNs();
 
     // Multi-threaded: producer sends, consumer receives (blocking)
     const producer = std.Thread.spawn(.{}, struct {
@@ -255,16 +265,18 @@ fn benchChannel(allocator: std.mem.Allocator, iterations: usize) f64 {
     }
     producer.join();
 
-    const ns_f: f64 = @floatFromInt(timer.read());
+    const ns_f: f64 = @floatFromInt(nowNs() - timer_start);
     const count_f: f64 = @floatFromInt(received);
     if (count_f == 0) return 0;
     return count_f / (ns_f / 1_000_000_000.0);
 }
 
 fn benchLogger(allocator: std.mem.Allocator, iterations: usize) f64 {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
     const test_dir = "zig-out/tmp/scale-bench-logger";
-    std.fs.cwd().makePath(test_dir) catch return 0;
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch return 0;
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const test_config = config.Config{
         .version = 1,
@@ -305,16 +317,13 @@ fn benchLogger(allocator: std.mem.Allocator, iterations: usize) f64 {
 
     const event = makeEvent();
 
-    var timer = std.time.Timer.start() catch {
-        logger_inst.deinit();
-        return 0;
-    };
+    const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
         logger_inst.audit(&event) catch {};
     }
 
-    const elapsed = timer.read();
+    const elapsed = nowNs() - timer_start;
     logger_inst.deinit();
 
     const count_f: f64 = @floatFromInt(iterations);
@@ -332,7 +341,7 @@ fn benchMixed(allocator: std.mem.Allocator, iterations: usize, field_count: usiz
     const metadata = makeMetadata(allocator, field_count) catch return 0;
     defer {
         var m = metadata;
-        if (m == .object) m.object.deinit();
+        if (m == .object) m.object.deinit(allocator);
     }
     var filters_cfg = config.FiltersConfig{
         .default_deny = true,
@@ -345,7 +354,7 @@ fn benchMixed(allocator: std.mem.Allocator, iterations: usize, field_count: usiz
     var rng = std.Random.DefaultPrng.init(42);
     const random = rng.random();
 
-    var timer = std.time.Timer.start() catch return 0;
+    const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
         const roll = random.intRangeAtMost(u32, 0, 99);
@@ -366,7 +375,7 @@ fn benchMixed(allocator: std.mem.Allocator, iterations: usize, field_count: usiz
     }
 
     const count_f: f64 = @floatFromInt(iterations);
-    const ns_f: f64 = @floatFromInt(timer.read());
+    const ns_f: f64 = @floatFromInt(nowNs() - timer_start);
     if (ns_f == 0) return 0;
     return count_f / (ns_f / 1_000_000_000.0);
 }
@@ -376,39 +385,37 @@ fn benchMixed(allocator: std.mem.Allocator, iterations: usize, field_count: usiz
 // ---------------------------------------------------------------------------
 
 fn runTier(allocator: std.mem.Allocator, tier: Tier) TierResult {
-    var tier_start = std.time.Timer.start() catch {
-        return skipResult(tier, "timer init failed");
-    };
+    const tier_start: u64 = nowNs();
 
     const iters = tier.event_count;
 
     print("    validate...\n", .{});
     const validate_ns = benchValidate(iters);
-    if (checkTimeout(&tier_start, tier)) |r| return r;
+    if (checkTimeout(tier_start, tier)) |r| return r;
 
     print("    clone...\n", .{});
     const clone_ns = benchClone(allocator, iters);
-    if (checkTimeout(&tier_start, tier)) |r| return r;
+    if (checkTimeout(tier_start, tier)) |r| return r;
 
     print("    CEF format...\n", .{});
     const cef_format_ns = benchCefFormat(allocator, iters);
-    if (checkTimeout(&tier_start, tier)) |r| return r;
+    if (checkTimeout(tier_start, tier)) |r| return r;
 
     print("    filter+redact...\n", .{});
     const filter_redact_ns = benchFilterRedact(allocator, iters, tier.metadata_fields);
-    if (checkTimeout(&tier_start, tier)) |r| return r;
+    if (checkTimeout(tier_start, tier)) |r| return r;
 
     print("    file sink...\n", .{});
     const file_sink_ns = benchFileSink(allocator, iters);
-    if (checkTimeout(&tier_start, tier)) |r| return r;
+    if (checkTimeout(tier_start, tier)) |r| return r;
 
     print("    channel...\n", .{});
     const channel_ops_sec = benchChannel(allocator, iters);
-    if (checkTimeout(&tier_start, tier)) |r| return r;
+    if (checkTimeout(tier_start, tier)) |r| return r;
 
     print("    logger...\n", .{});
     const logger_ops_sec = benchLogger(allocator, iters);
-    if (checkTimeout(&tier_start, tier)) |r| return r;
+    if (checkTimeout(tier_start, tier)) |r| return r;
 
     print("    mixed...\n", .{});
     const mixed_ops_sec = benchMixed(allocator, iters, tier.metadata_fields);
@@ -427,8 +434,8 @@ fn runTier(allocator: std.mem.Allocator, tier: Tier) TierResult {
     };
 }
 
-fn checkTimeout(tier_start: *std.time.Timer, tier: Tier) ?TierResult {
-    const elapsed = tier_start.read();
+fn checkTimeout(tier_start: u64, tier: Tier) ?TierResult {
+    const elapsed = nowNs() - tier_start;
     if (elapsed > TIER_TIMEOUT_NS) {
         return skipResult(tier, "timeout (>10min)");
     }
@@ -457,12 +464,13 @@ fn skipResult(tier: Tier, reason: []const u8) TierResult {
 // ---------------------------------------------------------------------------
 
 const StdoutWriter = struct {
-    file: std.fs.File,
+    file: std.Io.File,
+    io: std.Io,
     buf: [8192]u8 = undefined,
-    writer: ?std.fs.File.Writer = null,
+    writer: ?std.Io.File.Writer = null,
 
     fn open(self: *StdoutWriter) void {
-        self.writer = self.file.writer(&self.buf);
+        self.writer = self.file.writer(self.io, &self.buf);
     }
 
     fn writeAll(self: *StdoutWriter, data: []const u8) !void {
@@ -483,7 +491,7 @@ fn writeJsonOutput(out: *StdoutWriter, results: []const TierResult) !void {
     try out.writeAll("  \"version\": 1,\n");
 
     // Timestamp
-    const ts = std.time.timestamp();
+    const ts = timeSec();
     const epoch_secs: u64 = @intCast(ts);
     const es = std.time.epoch.EpochSeconds{ .secs = epoch_secs };
     const day_secs = es.getDaySeconds();
@@ -580,11 +588,11 @@ fn writeSummary(results: []const TierResult) void {
 // Main
 // ---------------------------------------------------------------------------
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;
 
     // Parse optional max-tier argument
-    var args = std.process.args();
+    var args = init.minimal.args.iterate();
     _ = args.next();
 
     var max_tier_count: usize = tiers.len;
@@ -614,7 +622,8 @@ pub fn main() !void {
 
     writeSummary(results[0..completed]);
 
-    var out = StdoutWriter{ .file = .{ .handle = std.posix.STDOUT_FILENO } };
+    const stdout_io = std.Io.Threaded.global_single_threaded.io();
+    var out = StdoutWriter{ .file = std.Io.File.stdout(), .io = stdout_io };
     out.open();
     try writeJsonOutput(&out, results[0..completed]);
 }

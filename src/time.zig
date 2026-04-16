@@ -6,6 +6,16 @@
 
 const std = @import("std");
 
+inline fn systemIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
+/// Current wall-clock time in milliseconds since the Unix epoch.
+/// Replaces the 0.15.2 `std.time.milliTimestamp` helper removed in 0.16.0.
+fn systemMilliTimestamp() i64 {
+    return std.Io.Clock.Timestamp.now(systemIo(), .real).raw.toMilliseconds();
+}
+
 pub const Clock = struct {
     context: *anyopaque,
     vtable: *const VTable,
@@ -59,11 +69,11 @@ pub const SystemClock = struct {
     }
 
     fn nowMsImpl(_: *anyopaque) i128 {
-        return std.time.milliTimestamp();
+        return systemMilliTimestamp();
     }
 
     fn nowRfc3339Impl(_: *anyopaque, buf: []u8) []const u8 {
-        return formatRfc3339(std.time.milliTimestamp(), buf);
+        return formatRfc3339(systemMilliTimestamp(), buf);
     }
 };
 
@@ -130,7 +140,12 @@ pub const SystemIdGen = struct {
 
     pub fn init() SystemIdGen {
         var seed_bytes: [8]u8 = undefined;
-        std.crypto.random.bytes(&seed_bytes);
+        systemIo().randomSecure(&seed_bytes) catch {
+            // Fall back to deterministic-but-unique seed on entropy failure.
+            // Worst case: requests collide within a single process start.
+            const ts = std.Io.Clock.Timestamp.now(systemIo(), .real).raw.toNanoseconds();
+            std.mem.writeInt(i64, seed_bytes[0..8], @truncate(ts), .little);
+        };
         return SystemIdGen{
             .rng = std.Random.DefaultPrng.init(@bitCast(seed_bytes)),
         };

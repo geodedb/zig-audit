@@ -29,61 +29,61 @@ pub fn formatCef(
     // Timestamp
     var ts_buf: [64]u8 = undefined;
     const ts_str = clock.nowRfc3339(&ts_buf);
-    try extension.writer(allocator).print("rt={s}", .{ts_str});
+    try extension.print(allocator, "rt={s}", .{ts_str});
 
     // Core fields
     const escaped_action = try escapeValue(allocator, event.action);
     defer allocator.free(escaped_action);
-    try extension.writer(allocator).print(" act={s}", .{escaped_action});
-    try extension.writer(allocator).print(" outcome={s}", .{event.outcome.toString()});
+    try extension.print(allocator, " act={s}", .{escaped_action});
+    try extension.print(allocator, " outcome={s}", .{event.outcome.toString()});
 
     if (event.actor_id.len > 0) {
         const escaped_actor = try escapeValue(allocator, event.actor_id);
         defer allocator.free(escaped_actor);
-        try extension.writer(allocator).print(" suser={s}", .{escaped_actor});
+        try extension.print(allocator, " suser={s}", .{escaped_actor});
     }
 
     if (event.subject_id) |subject_id| {
         const escaped_subject = try escapeValue(allocator, subject_id);
         defer allocator.free(escaped_subject);
-        try extension.writer(allocator).print(" duser={s}", .{escaped_subject});
+        try extension.print(allocator, " duser={s}", .{escaped_subject});
     }
 
     if (event.source_ip) |source_ip| {
         const escaped_ip = try escapeValue(allocator, source_ip);
         defer allocator.free(escaped_ip);
-        try extension.writer(allocator).print(" src={s}", .{escaped_ip});
+        try extension.print(allocator, " src={s}", .{escaped_ip});
     }
 
     if (event.request_id) |request_id| {
         const escaped_req = try escapeValue(allocator, request_id);
         defer allocator.free(escaped_req);
-        try extension.writer(allocator).print(" requestId={s}", .{escaped_req});
+        try extension.print(allocator, " requestId={s}", .{escaped_req});
     }
 
     if (event.trace_id) |trace_id| {
-        try extension.writer(allocator).print(" traceId={s}", .{@as([]const u8, &trace_id)});
+        try extension.print(allocator, " traceId={s}", .{@as([]const u8, &trace_id)});
     }
 
     if (event.span_id) |span_id| {
-        try extension.writer(allocator).print(" spanId={s}", .{@as([]const u8, &span_id)});
+        try extension.print(allocator, " spanId={s}", .{@as([]const u8, &span_id)});
     }
 
     // Custom signature fields
     const escaped_cs1 = try escapeValue(allocator, event.actor_id);
     defer allocator.free(escaped_cs1);
-    try extension.writer(allocator).print(" cs1Label=actorId cs1={s}", .{escaped_cs1});
+    try extension.print(allocator, " cs1Label=actorId cs1={s}", .{escaped_cs1});
 
     if (event.session_id) |session_id| {
         const escaped_session = try escapeValue(allocator, session_id);
         defer allocator.free(escaped_session);
-        try extension.writer(allocator).print(" cs2Label=sessionId cs2={s}", .{escaped_session});
+        try extension.print(allocator, " cs2Label=sessionId cs2={s}", .{escaped_session});
     }
 
     if (event.request_id) |request_id| {
         const escaped_dev = try escapeValue(allocator, request_id);
         defer allocator.free(escaped_dev);
-        try extension.writer(allocator).print(" deviceExternalId={s}", .{escaped_dev});
+        try extension.print(allocator, " deviceExternalId={s}", .{escaped_dev});
     }
 
     // Add metadata fields if present
@@ -148,21 +148,21 @@ fn addMetadataExtensions(allocator: std.mem.Allocator, extension: *std.ArrayList
             if (value == .string) {
                 const escaped = try escapeValue(allocator, value.string);
                 defer allocator.free(escaped);
-                try extension.writer(allocator).print(" cs3Label=dbOperation cs3={s}", .{escaped});
+                try extension.print(allocator, " cs3Label=dbOperation cs3={s}", .{escaped});
             }
         } else if (std.mem.eql(u8, key, "db.table")) {
             if (value == .string) {
                 const escaped = try escapeValue(allocator, value.string);
                 defer allocator.free(escaped);
-                try extension.writer(allocator).print(" cs4Label=dbTable cs4={s}", .{escaped});
+                try extension.print(allocator, " cs4Label=dbTable cs4={s}", .{escaped});
             }
         } else if (std.mem.eql(u8, key, "db.rowCount")) {
             if (value == .integer) {
-                try extension.writer(allocator).print(" cn1Label=rowCount cn1={d}", .{value.integer});
+                try extension.print(allocator, " cn1Label=rowCount cn1={d}", .{value.integer});
             }
         } else if (std.mem.eql(u8, key, "duration_ms")) {
             if (value == .integer) {
-                try extension.writer(allocator).print(" cn2Label=durationMs cn2={d}", .{value.integer});
+                try extension.print(allocator, " cn2Label=durationMs cn2={d}", .{value.integer});
             }
         } else {
             try addGenericExtension(allocator, extension, key, value);
@@ -177,17 +177,17 @@ fn addGenericExtension(allocator: std.mem.Allocator, extension: *std.ArrayList(u
             defer allocator.free(escaped_key);
             const escaped_val = try escapeValue(allocator, s);
             defer allocator.free(escaped_val);
-            try extension.writer(allocator).print(" {s}={s}", .{ escaped_key, escaped_val });
+            try extension.print(allocator, " {s}={s}", .{ escaped_key, escaped_val });
         },
         .integer => |i| {
             const escaped_key = try escapeKey(allocator, key);
             defer allocator.free(escaped_key);
-            try extension.writer(allocator).print(" {s}={d}", .{ escaped_key, i });
+            try extension.print(allocator, " {s}={d}", .{ escaped_key, i });
         },
         .bool => |b| {
             const escaped_key = try escapeKey(allocator, key);
             defer allocator.free(escaped_key);
-            try extension.writer(allocator).print(" {s}={s}", .{ escaped_key, if (b) "true" else "false" });
+            try extension.print(allocator, " {s}={s}", .{ escaped_key, if (b) "true" else "false" });
         },
         else => {},
     }
@@ -235,7 +235,7 @@ pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_heade
 
 test "CEF formatting" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -276,7 +276,7 @@ test "CEF formatting" {
 
 test "escapeCefString: header escapes backslash and pipe" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -303,7 +303,7 @@ test "escapeCefString: header escapes backslash and pipe" {
 
 test "escapeCefString: extension value escapes backslash, equals, and newlines" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -335,7 +335,7 @@ test "escapeCefString: extension value escapes backslash, equals, and newlines" 
 
 test "escapeCefString: no special characters returns input unchanged" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

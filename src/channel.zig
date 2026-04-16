@@ -8,6 +8,7 @@
 //! file sink workers to replace hand-rolled RingBuffer + external Mutex patterns.
 
 const std = @import("std");
+const sync = @import("sync.zig");
 
 pub fn BoundedChannel(comptime T: type) type {
     return struct {
@@ -17,8 +18,8 @@ pub fn BoundedChannel(comptime T: type) type {
         head: usize,
         tail: usize,
         count: usize,
-        mutex: std.Thread.Mutex,
-        not_empty: std.Thread.Condition,
+        mutex: sync.Mutex,
+        not_empty: sync.Condition,
         closed: bool,
         allocator: std.mem.Allocator,
 

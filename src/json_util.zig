@@ -31,7 +31,7 @@ pub fn freeJsonValue(allocator: std.mem.Allocator, value: std.json.Value) void {
                 allocator.free(entry.key_ptr.*);
                 freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj.deinit();
+            obj.deinit(allocator);
         },
         else => {},
     }
@@ -55,12 +55,12 @@ pub fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.
             break :blk std.json.Value{ .array = cloned_array };
         },
         .object => |obj| blk: {
-            var cloned_map = std.json.ObjectMap.init(allocator);
+            var cloned_map: std.json.ObjectMap = .empty;
             var iter = obj.iterator();
             while (iter.next()) |entry| {
                 const cloned_key = try allocator.dupe(u8, entry.key_ptr.*);
                 const cloned_value = try cloneJsonValue(allocator, entry.value_ptr.*);
-                try cloned_map.put(cloned_key, cloned_value);
+                try cloned_map.put(allocator, cloned_key, cloned_value);
             }
             break :blk std.json.Value{ .object = cloned_map };
         },
@@ -109,13 +109,13 @@ test "cloneJsonValue deep-clones nested object" {
     const allocator = std.testing.allocator;
 
     // Build { "a": "v1", "nested": { "b": 42 } } with heap-allocated keys/values
-    var inner = std.json.ObjectMap.init(allocator);
-    try inner.put(try allocator.dupe(u8, "b"), std.json.Value{ .integer = 42 });
+    var inner: std.json.ObjectMap = .empty;
+    try inner.put(allocator, try allocator.dupe(u8, "b"), std.json.Value{ .integer = 42 });
     const inner_val = std.json.Value{ .object = inner };
 
-    var outer = std.json.ObjectMap.init(allocator);
-    try outer.put(try allocator.dupe(u8, "a"), std.json.Value{ .string = try allocator.dupe(u8, "v1") });
-    try outer.put(try allocator.dupe(u8, "nested"), inner_val);
+    var outer: std.json.ObjectMap = .empty;
+    try outer.put(allocator, try allocator.dupe(u8, "a"), std.json.Value{ .string = try allocator.dupe(u8, "v1") });
+    try outer.put(allocator, try allocator.dupe(u8, "nested"), inner_val);
     const original = std.json.Value{ .object = outer };
 
     const cloned = try cloneJsonValue(allocator, original);

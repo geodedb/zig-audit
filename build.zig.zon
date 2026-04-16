@@ -2,11 +2,11 @@
     .name = .audit,
     .version = "0.1.0",
     .fingerprint = 0x9218ff7908edd427,
-    .minimum_zig_version = "0.15.1",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#1a879aa5f2be8bd9e42d5d6ec1c2c2d23fd861b3",
-            .hash = "dns-0.1.0-x4U-zVtZEACovYk61iTXPHLJ5mgKG9-KYu0cpbaxUeNG",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#530fb00e931a3bf21758e3d717dbde6f1dd84984",
+            .hash = "dns-0.1.0-x4U-zWzJEACVURZDhKC-DcSpbUr7YRydkAU9Uiy8mgjp",
         },
     },
     .paths = .{

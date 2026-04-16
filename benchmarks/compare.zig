@@ -95,13 +95,12 @@ const metrics = [_]Metric{
 // ---------------------------------------------------------------------------
 
 fn readJsonFile(allocator: std.mem.Allocator, path: []const u8) !BenchResult {
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    const content = cwd.readFileAlloc(io, path, allocator, .limited(10 * 1024 * 1024)) catch |err| {
         print("Error: cannot open '{s}': {s}\n", .{ path, @errorName(err) });
         return err;
     };
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 10 * 1024 * 1024);
     defer allocator.free(content);
 
     const parsed = std.json.parseFromSlice(BenchResult, allocator, content, .{
@@ -143,10 +142,10 @@ fn isRegression(delta_pct: f64, kind: MetricKind, threshold: f64) bool {
 // Main
 // ---------------------------------------------------------------------------
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const allocator = std.heap.page_allocator;
 
-    var args = std.process.args();
+    var args = init.minimal.args.iterate();
     _ = args.next();
 
     const baseline_path = args.next() orelse {

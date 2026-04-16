@@ -15,11 +15,15 @@ const log = std.log.scoped(.audit);
 
 const FILE_QUEUE_SIZE = 10000;
 
+inline fn systemIo() std.Io {
+    return std.Io.Threaded.global_single_threaded.io();
+}
+
 pub const FileSink = struct {
     allocator: std.mem.Allocator,
     config: config.FileSinkConfig,
     clock: time.Clock,
-    current_file: ?std.fs.File,
+    current_file: ?std.Io.File,
     current_size: u64,
     writes_since_sync: u32,
     ch: BoundedChannel([]const u8),
@@ -61,7 +65,7 @@ pub const FileSink = struct {
         self.ch.deinit();
 
         if (self.current_file) |file| {
-            file.close();
+            file.close(systemIo());
         }
         self.allocator.destroy(self);
     }
@@ -86,11 +90,11 @@ pub const FileSink = struct {
         var ts_buf: [64]u8 = undefined;
         const timestamp = self.clock.nowRfc3339(&ts_buf);
 
-        var obj = std.json.ObjectMap.init(self.allocator);
-        defer obj.deinit();
-        try obj.put("ts", std.json.Value{ .string = timestamp });
-        try obj.put("level", std.json.Value{ .string = "ERROR" });
-        try obj.put("msg", std.json.Value{ .string = error_msg });
+        var obj: std.json.ObjectMap = .empty;
+        defer obj.deinit(self.allocator);
+        try obj.put(self.allocator, "ts", std.json.Value{ .string = timestamp });
+        try obj.put(self.allocator, "level", std.json.Value{ .string = "ERROR" });
+        try obj.put(self.allocator, "msg", std.json.Value{ .string = error_msg });
         const error_line = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
 
         if (!self.ch.trySend(error_line)) {
@@ -117,21 +121,23 @@ pub const FileSink = struct {
         try self.checkRotation(line.len);
 
         if (self.current_file) |file| {
-            try file.writeAll(line);
-            try file.writeAll("\n");
+            const io = systemIo();
+            try file.writeStreamingAll(io, line);
+            try file.writeStreamingAll(io, "\n");
             self.current_size += line.len + 1;
             try self.maybeFsync(file);
         }
     }
 
     /// Perform fsync based on the configured sync_mode.
-    fn maybeFsync(self: *FileSink, file: std.fs.File) !void {
+    fn maybeFsync(self: *FileSink, file: std.Io.File) !void {
+        const io = systemIo();
         switch (self.config.sync_mode) {
-            .per_event => try file.sync(),
+            .per_event => try file.sync(io),
             .periodic => {
                 self.writes_since_sync += 1;
                 if (self.writes_since_sync >= self.config.sync_interval) {
-                    try file.sync();
+                    try file.sync(io);
                     self.writes_since_sync = 0;
                 }
             },
@@ -144,20 +150,21 @@ pub const FileSink = struct {
     /// same `try obj.put(try dupe(key), .{ .string = try dupe(value) })` pattern.
     fn putField(self: *FileSink, obj: *std.json.ObjectMap, key: []const u8, value: []const u8) !void {
         try obj.put(
+            self.allocator,
             try self.allocator.dupe(u8, key),
             std.json.Value{ .string = try self.allocator.dupe(u8, value) },
         );
     }
 
     fn formatJsonLine(self: *FileSink, event: *const events.AuditEvent, filtered_metadata: ?std.json.Value) ![]const u8 {
-        var json_obj = std.json.ObjectMap.init(self.allocator);
+        var json_obj: std.json.ObjectMap = .empty;
         defer {
             var iter = json_obj.iterator();
             while (iter.next()) |entry| {
                 self.allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(self.allocator, entry.value_ptr.*);
             }
-            json_obj.deinit();
+            json_obj.deinit(self.allocator);
         }
 
         var ts_buf: [64]u8 = undefined;
@@ -205,7 +212,7 @@ pub const FileSink = struct {
                     }
                     const key = try self.allocator.dupe(u8, entry.key_ptr.*);
                     const value = try json_util.cloneJsonValue(self.allocator, entry.value_ptr.*);
-                    try json_obj.put(key, value);
+                    try json_obj.put(self.allocator, key, value);
                 }
             }
         }
@@ -221,8 +228,10 @@ pub const FileSink = struct {
     }
 
     fn rotateFile(self: *FileSink) !void {
+        const io = systemIo();
+        const cwd = std.Io.Dir.cwd();
         if (self.current_file) |file| {
-            file.close();
+            file.close(io);
             self.current_file = null;
         }
 
@@ -234,7 +243,7 @@ pub const FileSink = struct {
             const new_backup_path = try std.fmt.allocPrint(self.allocator, "{s}.{d}", .{ self.config.path, i });
             defer self.allocator.free(new_backup_path);
 
-            std.fs.cwd().rename(old_backup_path, new_backup_path) catch |err| {
+            cwd.rename(old_backup_path, cwd, new_backup_path, io) catch |err| {
                 log.warn("audit file rotation failed: {s}", .{@errorName(err)});
             };
         }
@@ -242,7 +251,7 @@ pub const FileSink = struct {
         if (self.config.backup_count > 0) {
             const backup_path = try std.fmt.allocPrint(self.allocator, "{s}.1", .{self.config.path});
             defer self.allocator.free(backup_path);
-            std.fs.cwd().rename(self.config.path, backup_path) catch |err| {
+            cwd.rename(self.config.path, cwd, backup_path, io) catch |err| {
                 log.warn("audit file rotation failed: {s}", .{@errorName(err)});
             };
         }
@@ -255,20 +264,23 @@ pub const FileSink = struct {
             return error.PathTraversalRejected;
         }
 
+        const io = systemIo();
+        const cwd = std.Io.Dir.cwd();
+
         if (std.fs.path.dirname(self.config.path)) |dir_path| {
-            std.fs.cwd().makePath(dir_path) catch |err| {
+            cwd.createDirPath(io, dir_path) catch |err| {
                 log.warn("audit file rotation failed: {s}", .{@errorName(err)});
             };
         }
 
-        self.current_file = try std.fs.cwd().createFile(self.config.path, .{ .truncate = false });
+        self.current_file = try cwd.createFile(io, self.config.path, .{ .truncate = false });
 
         if (self.current_file) |file| {
-            const stat = try file.stat();
+            const stat = try file.stat(io);
             self.current_size = stat.size;
 
             if (builtin.os.tag != .windows) {
-                try file.chmod(0o640);
+                try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o640));
             }
         }
     }
@@ -276,16 +288,19 @@ pub const FileSink = struct {
 
 test "file sink rotation" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     const clock = fixed_clock.clock();
 
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
     const test_dir = "zig-out/tmp/test-logs";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -322,7 +337,7 @@ test "file sink rotation" {
 
     const backup1_path = test_dir ++ "/audit.log.1";
     const backup1_exists = blk: {
-        std.fs.cwd().access(backup1_path, .{}) catch break :blk false;
+        cwd.access(io, backup1_path, .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(backup1_exists);
@@ -342,16 +357,19 @@ test "FileSink sync_mode per_event is default" {
 
 test "FileSink sync_mode none writes to file" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     const clock = fixed_clock.clock();
 
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
     const test_dir = "zig-out/tmp/test-sync-none";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -385,24 +403,27 @@ test "FileSink sync_mode none writes to file" {
     sink.deinit();
 
     // Verify file has content
-    const file = try std.fs.cwd().openFile(test_dir ++ "/audit.log", .{});
-    defer file.close();
-    const stat = try file.stat();
+    const file = try cwd.openFile(io, test_dir ++ "/audit.log", .{});
+    defer file.close(io);
+    const stat = try file.stat(io);
     try testing.expect(stat.size > 0);
 }
 
 test "FileSink sync_mode periodic writes to file" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     const clock = fixed_clock.clock();
 
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
     const test_dir = "zig-out/tmp/test-sync-periodic";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -441,7 +462,7 @@ test "FileSink sync_mode periodic writes to file" {
     sink.deinit();
 
     // Verify all 6 events written (each event is a JSON line)
-    const content = try std.fs.cwd().readFileAlloc(allocator, test_dir ++ "/audit.log", 1048576);
+    const content = try cwd.readFileAlloc(io, test_dir ++ "/audit.log", allocator, .limited(1048576));
     defer allocator.free(content);
     var line_count: u32 = 0;
     var iter = std.mem.splitScalar(u8, content, '\n');

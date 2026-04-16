@@ -11,7 +11,7 @@ const file_sink = audit.file_sink;
 const time = audit.time;
 
 test "syslog RFC5424 formatting" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -81,16 +81,19 @@ test "syslog severity and facility calculation" {
 }
 
 test "file sink JSON formatting" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     const clock = fixed_clock.clock();
 
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
     const test_dir = "zig-out/tmp/test-file-sink";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -100,12 +103,11 @@ test "file sink JSON formatting" {
     };
 
     const sink = try file_sink.FileSink.init(allocator, file_config, clock);
-    defer sink.deinit();
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
-    try metadata_obj.put("user_action", std.json.Value{ .string = "profile_update" });
-    try metadata_obj.put("request_size", std.json.Value{ .integer = 1024 });
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "user_action", std.json.Value{ .string = "profile_update" });
+    try metadata_obj.put(allocator, "request_size", std.json.Value{ .integer = 1024 });
     const metadata = std.json.Value{ .object = metadata_obj };
 
     const event = events.AuditEvent{
@@ -126,10 +128,11 @@ test "file sink JSON formatting" {
 
     try sink.write(&event, metadata);
 
-    const file = try std.fs.cwd().openFile(file_config.path, .{});
-    defer file.close();
+    // deinit drains queued writes to disk
+    // (we can't read while the sink is still alive since workerThread writes are async)
+    sink.deinit();
 
-    const content = try file.readToEndAlloc(allocator, 8192);
+    const content = try cwd.readFileAlloc(io, file_config.path, allocator, .limited(8192));
     defer allocator.free(content);
 
     const line = std.mem.trim(u8, content, " \n\r\t");
@@ -156,16 +159,19 @@ test "file sink JSON formatting" {
 }
 
 test "file rotation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     const clock = fixed_clock.clock();
 
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
     const test_dir = "zig-out/tmp/test-rotation";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const file_config = config.FileSinkConfig{
         .enabled = true,
@@ -201,12 +207,12 @@ test "file rotation" {
     sink.deinit();
 
     const file_exists = blk: {
-        std.fs.cwd().access(test_dir ++ "/rotate.log", .{}) catch break :blk false;
+        cwd.access(io, test_dir ++ "/rotate.log", .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(file_exists);
     const backup_exists = blk: {
-        std.fs.cwd().access(test_dir ++ "/rotate.log.1", .{}) catch break :blk false;
+        cwd.access(io, test_dir ++ "/rotate.log.1", .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(backup_exists);

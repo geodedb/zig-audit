@@ -24,6 +24,12 @@ const cef = audit.cef;
 const time = audit.time;
 const json_util = audit.json_util;
 
+inline fn nowNs() u64 {
+    const io_inst = std.Io.Threaded.global_single_threaded.io();
+    const ts = std.Io.Clock.Timestamp.now(io_inst, .awake);
+    return @intCast(ts.raw.toNanoseconds());
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -106,12 +112,12 @@ fn makeEvent() AuditEvent {
 }
 
 fn makeEventWithMetadata(allocator: std.mem.Allocator) !AuditEvent {
-    var obj = std.json.ObjectMap.init(allocator);
-    try obj.put("username", std.json.Value{ .string = "john.doe@example.com" });
-    try obj.put("department", std.json.Value{ .string = "Engineering" });
-    try obj.put("action_detail", std.json.Value{ .string = "Password change via self-service portal" });
-    try obj.put("client_version", std.json.Value{ .string = "2.4.1" });
-    try obj.put("mfa_method", std.json.Value{ .string = "totp" });
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(allocator, "username", std.json.Value{ .string = "john.doe@example.com" });
+    try obj.put(allocator, "department", std.json.Value{ .string = "Engineering" });
+    try obj.put(allocator, "action_detail", std.json.Value{ .string = "Password change via self-service portal" });
+    try obj.put(allocator, "client_version", std.json.Value{ .string = "2.4.1" });
+    try obj.put(allocator, "mfa_method", std.json.Value{ .string = "totp" });
 
     var event = makeEvent();
     event.metadata = std.json.Value{ .object = obj };
@@ -139,25 +145,25 @@ fn makeFiltersConfig() config.FiltersConfig {
 
 fn benchEventValidation() BenchResult {
     const event = makeEvent();
-    var timer = std.time.Timer.start() catch return BenchResult{ .name = "event validation", .count = 0, .total_ns = 0 };
+    const timer_start: u64 = nowNs();
 
     for (0..EVENT_COUNT) |_| {
         event.validate() catch {};
     }
 
-    return BenchResult{ .name = "event validation", .count = EVENT_COUNT, .total_ns = timer.read() };
+    return BenchResult{ .name = "event validation", .count = EVENT_COUNT, .total_ns = nowNs() - timer_start };
 }
 
 fn benchEventClone(allocator: std.mem.Allocator) BenchResult {
     const event = makeEvent();
-    var timer = std.time.Timer.start() catch return BenchResult{ .name = "event clone", .count = 0, .total_ns = 0 };
+    const timer_start: u64 = nowNs();
 
     for (0..EVENT_COUNT) |_| {
         var cloned = event.clone(allocator) catch continue;
         cloned.freeCloned(allocator);
     }
 
-    return BenchResult{ .name = "event clone", .count = EVENT_COUNT, .total_ns = timer.read() };
+    return BenchResult{ .name = "event clone", .count = EVENT_COUNT, .total_ns = nowNs() - timer_start };
 }
 
 fn benchCefFormat(allocator: std.mem.Allocator) BenchResult {
@@ -170,30 +176,30 @@ fn benchCefFormat(allocator: std.mem.Allocator) BenchResult {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     const clock = fixed_clock.clock();
 
-    var timer = std.time.Timer.start() catch return BenchResult{ .name = "CEF format", .count = 0, .total_ns = 0 };
+    const timer_start: u64 = nowNs();
 
     for (0..CEF_COUNT) |_| {
         const msg = cef.formatCef(allocator, &event, &identity, clock) catch continue;
         allocator.free(msg);
     }
 
-    return BenchResult{ .name = "CEF format", .count = CEF_COUNT, .total_ns = timer.read() };
+    return BenchResult{ .name = "CEF format", .count = CEF_COUNT, .total_ns = nowNs() - timer_start };
 }
 
 fn benchMetadataFilter(allocator: std.mem.Allocator) BenchResult {
     // Build metadata with sensitive fields
-    var obj = std.json.ObjectMap.init(allocator);
-    obj.put("username", std.json.Value{ .string = "john.doe@example.com" }) catch {};
-    obj.put("password", std.json.Value{ .string = "secret123" }) catch {};
-    obj.put("credit_card", std.json.Value{ .string = "4111111111111111" }) catch {};
-    obj.put("department", std.json.Value{ .string = "Engineering" }) catch {};
-    obj.put("phone", std.json.Value{ .string = "+1-555-123-4567" }) catch {};
-    defer obj.deinit();
+    var obj: std.json.ObjectMap = .empty;
+    obj.put(allocator, "username", std.json.Value{ .string = "john.doe@example.com" }) catch {};
+    obj.put(allocator, "password", std.json.Value{ .string = "secret123" }) catch {};
+    obj.put(allocator, "credit_card", std.json.Value{ .string = "4111111111111111" }) catch {};
+    obj.put(allocator, "department", std.json.Value{ .string = "Engineering" }) catch {};
+    obj.put(allocator, "phone", std.json.Value{ .string = "+1-555-123-4567" }) catch {};
+    defer obj.deinit(allocator);
 
     const metadata = std.json.Value{ .object = obj };
     var filters_cfg = makeFiltersConfig();
 
-    var timer = std.time.Timer.start() catch return BenchResult{ .name = "metadata filter+redact", .count = 0, .total_ns = 0 };
+    const timer_start: u64 = nowNs();
 
     for (0..FILTER_COUNT) |_| {
         const result = filters.filterAndRedactMetadata(allocator, metadata, &filters_cfg) catch continue;
@@ -202,19 +208,19 @@ fn benchMetadataFilter(allocator: std.mem.Allocator) BenchResult {
         }
     }
 
-    return BenchResult{ .name = "metadata filter+redact", .count = FILTER_COUNT, .total_ns = timer.read() };
+    return BenchResult{ .name = "metadata filter+redact", .count = FILTER_COUNT, .total_ns = nowNs() - timer_start };
 }
 
 fn benchSensitiveKeyDetect() BenchResult {
     const keys = [_][]const u8{
-        "password",       "api_key",         "authorization",
-        "credit_card",    "ssn",             "email",
-        "phone_number",   "private_key_pem", "session_token",
+        "password",     "api_key",         "authorization",
+        "credit_card",  "ssn",             "email",
+        "phone_number", "private_key_pem", "session_token",
         "safe_field",
     };
     const total = EVENT_COUNT * keys.len;
 
-    var timer = std.time.Timer.start() catch return BenchResult{ .name = "sensitive key detect", .count = 0, .total_ns = 0 };
+    const timer_start: u64 = nowNs();
 
     for (0..EVENT_COUNT) |_| {
         for (keys) |key| {
@@ -222,14 +228,14 @@ fn benchSensitiveKeyDetect() BenchResult {
         }
     }
 
-    return BenchResult{ .name = "sensitive key detect", .count = total, .total_ns = timer.read() };
+    return BenchResult{ .name = "sensitive key detect", .count = total, .total_ns = nowNs() - timer_start };
 }
 
 fn benchChannelThroughput(allocator: std.mem.Allocator) BenchResult {
     var ch = BoundedChannel(u64).init(allocator, 1024) catch return BenchResult{ .name = "channel throughput", .count = 0, .total_ns = 0 };
     defer ch.deinit();
 
-    var timer = std.time.Timer.start() catch return BenchResult{ .name = "channel throughput", .count = 0, .total_ns = 0 };
+    const timer_start: u64 = nowNs();
 
     // Single-threaded: send/receive pairs to measure raw channel overhead
     for (0..CHANNEL_COUNT) |i| {
@@ -237,7 +243,7 @@ fn benchChannelThroughput(allocator: std.mem.Allocator) BenchResult {
         _ = ch.tryReceive();
     }
 
-    return BenchResult{ .name = "channel throughput", .count = CHANNEL_COUNT, .total_ns = timer.read() };
+    return BenchResult{ .name = "channel throughput", .count = CHANNEL_COUNT, .total_ns = nowNs() - timer_start };
 }
 
 fn benchChannelMT(allocator: std.mem.Allocator) BenchResult {
@@ -245,7 +251,7 @@ fn benchChannelMT(allocator: std.mem.Allocator) BenchResult {
     defer ch.deinit();
 
     const count = CHANNEL_COUNT;
-    var timer = std.time.Timer.start() catch return BenchResult{ .name = "channel MT throughput", .count = 0, .total_ns = 0 };
+    const timer_start: u64 = nowNs();
 
     // Producer thread
     const producer = std.Thread.spawn(.{}, struct {
@@ -266,13 +272,15 @@ fn benchChannelMT(allocator: std.mem.Allocator) BenchResult {
     }
 
     producer.join();
-    return BenchResult{ .name = "channel MT throughput", .count = received, .total_ns = timer.read() };
+    return BenchResult{ .name = "channel MT throughput", .count = received, .total_ns = nowNs() - timer_start };
 }
 
 fn benchLoggerAudit(allocator: std.mem.Allocator) BenchResult {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
     const test_dir = "zig-out/tmp/bench-logger";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     const test_config = config.Config{
         .version = 1,
@@ -322,16 +330,13 @@ fn benchLoggerAudit(allocator: std.mem.Allocator) BenchResult {
 
     const event = makeEvent();
 
-    var timer = std.time.Timer.start() catch {
-        logger_inst.deinit();
-        return BenchResult{ .name = "logger audit()", .count = 0, .total_ns = 0 };
-    };
+    const timer_start: u64 = nowNs();
 
     for (0..LOGGER_COUNT) |_| {
         logger_inst.audit(&event) catch {};
     }
 
-    const elapsed = timer.read();
+    const elapsed = nowNs() - timer_start;
     logger_inst.deinit();
 
     return BenchResult{ .name = "logger audit()", .count = LOGGER_COUNT, .total_ns = elapsed };

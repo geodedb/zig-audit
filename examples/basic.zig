@@ -13,11 +13,12 @@
 const std = @import("std");
 const audit = @import("audit");
 
-/// Helper to write to stdout on Zig 0.15+ where std.io.getStdOut is removed.
+/// Helper to write to stdout on Zig 0.16+ where std.io.getStdOut is removed.
 fn printStdout(comptime fmt: []const u8, args: anytype) void {
     var buf: [4096]u8 = undefined;
-    const file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
-    var w = file.writer(&buf);
+    const file: std.Io.File = std.Io.File.stdout();
+    const io = std.Io.Threaded.global_single_threaded.io();
+    var w = file.writer(io, &buf);
     w.interface.print(fmt, args) catch return;
     w.interface.flush() catch return;
 }
@@ -27,7 +28,7 @@ pub fn main() !void {
     printStdout("==============================\n\n", .{});
 
     // -- 1. Allocator setup -------------------------------------------------
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -116,10 +117,9 @@ pub fn main() !void {
     printStdout("[logger] emitted auth.login event\n", .{});
 
     // -- 6. Read back the file sink output ----------------------------------
-    const file = try std.fs.cwd().openFile("zig-out/tmp/example-audit.log", .{});
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 8192);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    const content = try cwd.readFileAlloc(io, "zig-out/tmp/example-audit.log", allocator, .limited(8192));
     defer allocator.free(content);
 
     printStdout("\n[file sink output]\n{s}\n", .{content});

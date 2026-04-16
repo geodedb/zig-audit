@@ -10,7 +10,7 @@ const cef = audit.cef;
 const time = audit.time;
 
 test "CEF formatting basic structure" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -63,7 +63,7 @@ test "CEF severity mapping" {
 }
 
 test "CEF with metadata extensions" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -76,13 +76,13 @@ test "CEF with metadata extensions" {
         .version = "0.1.0",
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("db.operation", std.json.Value{ .string = "UPDATE" });
-    try metadata_obj.put("db.table", std.json.Value{ .string = "users" });
-    try metadata_obj.put("db.rowCount", std.json.Value{ .integer = 1 });
-    try metadata_obj.put("duration_ms", std.json.Value{ .integer = 42 });
+    try metadata_obj.put(allocator, "db.operation", std.json.Value{ .string = "UPDATE" });
+    try metadata_obj.put(allocator, "db.table", std.json.Value{ .string = "users" });
+    try metadata_obj.put(allocator, "db.rowCount", std.json.Value{ .integer = 1 });
+    try metadata_obj.put(allocator, "duration_ms", std.json.Value{ .integer = 42 });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -112,7 +112,7 @@ test "CEF with metadata extensions" {
 }
 
 test "CEF header escaping: pipe and backslash are escaped" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -150,7 +150,7 @@ test "CEF header escaping: pipe and backslash are escaped" {
 }
 
 test "CEF header escaping: equals is NOT escaped in headers" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -161,7 +161,7 @@ test "CEF header escaping: equals is NOT escaped in headers" {
 }
 
 test "CEF extension value escaping: equals, newlines, carriage returns" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -192,7 +192,7 @@ test "CEF extension value escaping: equals, newlines, carriage returns" {
 }
 
 test "CEF formatCef with adversarial input produces valid CEF" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -272,7 +272,7 @@ test "CEF formatCef with adversarial input produces valid CEF" {
 }
 
 test "CEF event name mapping" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

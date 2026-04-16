@@ -20,7 +20,7 @@ test "integration: library initializes successfully" {
 }
 
 test "integration: auth login success with exact syslog output" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -63,7 +63,7 @@ test "integration: auth login success with exact syslog output" {
 }
 
 test "integration: sensitive data redaction" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -75,12 +75,12 @@ test "integration: sensitive data redaction" {
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer audit_logger.deinit();
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("password", std.json.Value{ .string = "Sup3rSecret!" });
-    try metadata_obj.put("card", std.json.Value{ .string = "4111 1111 1111 1111" });
-    try metadata_obj.put("jwt", std.json.Value{ .string = "eyJhbGciOi...aaa.bbb" });
+    try metadata_obj.put(allocator, "password", std.json.Value{ .string = "Sup3rSecret!" });
+    try metadata_obj.put(allocator, "card", std.json.Value{ .string = "4111 1111 1111 1111" });
+    try metadata_obj.put(allocator, "jwt", std.json.Value{ .string = "eyJhbGciOi...aaa.bbb" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -103,10 +103,9 @@ test "integration: sensitive data redaction" {
     try audit_logger.audit(&event);
 
     // Read the file sink output to verify redaction was applied
-    const file = std.fs.cwd().openFile(test_config.sinks.file.path, .{}) catch return;
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 8192);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    const content = cwd.readFileAlloc(io, test_config.sinks.file.path, allocator, .limited(8192)) catch return;
     defer allocator.free(content);
 
     if (content.len > 0) {
@@ -122,16 +121,19 @@ test "integration: sensitive data redaction" {
 }
 
 test "integration: file rotation functionality" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
 
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
     const test_dir = "zig-out/tmp/test-logs";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     var test_config = try config.loadTestConfig(allocator);
 
@@ -171,24 +173,24 @@ test "integration: file rotation functionality" {
     const backup3 = test_dir ++ "/audit.log.3";
 
     const audit_log_exists = blk: {
-        std.fs.cwd().access(audit_log, .{}) catch break :blk false;
+        cwd.access(io, audit_log, .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(audit_log_exists);
     const backup1_exists = blk: {
-        std.fs.cwd().access(backup1, .{}) catch break :blk false;
+        cwd.access(io, backup1, .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(backup1_exists);
     const backup3_exists = blk: {
-        std.fs.cwd().access(backup3, .{}) catch break :blk false;
+        cwd.access(io, backup3, .{}) catch break :blk false;
         break :blk true;
     };
     try testing.expect(!backup3_exists);
 }
 
 test "integration: default deny filtering" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -200,12 +202,12 @@ test "integration: default deny filtering" {
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer audit_logger.deinit();
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("nickname", std.json.Value{ .string = "jay" });
-    try metadata_obj.put("notes", std.json.Value{ .string = "loves pizza" });
-    try metadata_obj.put("actor_id", std.json.Value{ .string = "jane.doe" });
+    try metadata_obj.put(allocator, "nickname", std.json.Value{ .string = "jay" });
+    try metadata_obj.put(allocator, "notes", std.json.Value{ .string = "loves pizza" });
+    try metadata_obj.put(allocator, "actor_id", std.json.Value{ .string = "jane.doe" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -228,10 +230,9 @@ test "integration: default deny filtering" {
     try audit_logger.audit(&event);
 
     // Read the file sink output to verify default-deny filtering
-    const file = std.fs.cwd().openFile(test_config.sinks.file.path, .{}) catch return;
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 8192);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    const content = cwd.readFileAlloc(io, test_config.sinks.file.path, allocator, .limited(8192)) catch return;
     defer allocator.free(content);
 
     if (content.len > 0) {
@@ -246,16 +247,19 @@ test "integration: default deny filtering" {
 }
 
 test "integration: fail closed behavior" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
 
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
     const test_dir = "zig-out/tmp/test-fail-closed";
-    std.fs.cwd().makePath(test_dir) catch {};
-    defer std.fs.cwd().deleteTree(test_dir) catch {};
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
 
     var test_config = try config.loadTestConfig(allocator);
 
@@ -265,10 +269,10 @@ test "integration: fail closed behavior" {
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer audit_logger.deinit();
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("private_key", std.json.Value{ .string = "raw_key_bytes_without_pem_markers_12345" });
+    try metadata_obj.put(allocator, "private_key", std.json.Value{ .string = "raw_key_bytes_without_pem_markers_12345" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -290,10 +294,7 @@ test "integration: fail closed behavior" {
 
     try audit_logger.audit(&event);
 
-    const file = std.fs.cwd().openFile(test_config.sinks.file.path, .{}) catch return;
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 8192);
+    const content = cwd.readFileAlloc(io, test_config.sinks.file.path, allocator, .limited(8192)) catch return;
     defer allocator.free(content);
 
     if (content.len > 0) {

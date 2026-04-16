@@ -317,8 +317,8 @@ fn filterAndRedactMetadataRecursive(
 
     return switch (metadata) {
         .object => |obj| blk: {
-            var filtered_map = std.json.ObjectMap.init(allocator);
-            errdefer filtered_map.deinit();
+            var filtered_map: std.json.ObjectMap = .empty;
+            errdefer filtered_map.deinit(allocator);
 
             var iter = obj.iterator();
             while (iter.next()) |entry| {
@@ -329,7 +329,7 @@ fn filterAndRedactMetadataRecursive(
                 switch (filter_result) {
                     .allow => {
                         const processed_value = try redactValueRecursive(allocator, value, filters_cfg, depth + 1);
-                        try filtered_map.put(try allocator.dupe(u8, key), processed_value);
+                        try filtered_map.put(allocator, try allocator.dupe(u8, key), processed_value);
                     },
                     .redact => |key_token| {
                         // Determine the redacted string, applying masking when pii_mode == .mask.
@@ -358,10 +358,10 @@ fn filterAndRedactMetadataRecursive(
                             break :redact_blk try allocator.dupe(u8, "[REDACTED]");
                         };
                         const redacted = std.json.Value{ .string = redacted_str };
-                        try filtered_map.put(try allocator.dupe(u8, key), redacted);
+                        try filtered_map.put(allocator, try allocator.dupe(u8, key), redacted);
                     },
                     .drop_event => {
-                        filtered_map.deinit();
+                        filtered_map.deinit(allocator);
                         return null;
                     },
                 }
@@ -392,7 +392,7 @@ fn redactValueRecursive(
             const result = try filterAndRedactMetadataRecursive(allocator, value, filters_cfg, depth);
             // filterAndRedactMetadataRecursive returns null for drop_event;
             // in a nested context, replace with an empty object
-            break :blk result orelse std.json.Value{ .object = std.json.ObjectMap.init(allocator) };
+            break :blk result orelse std.json.Value{ .object = .empty };
         },
         .array => |arr| blk: {
             var redacted_array = std.json.Array.init(allocator);

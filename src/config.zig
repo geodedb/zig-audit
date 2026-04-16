@@ -171,13 +171,11 @@ pub const Config = struct {
 };
 
 pub fn loadConfig(allocator: std.mem.Allocator, path: []const u8) !Config {
-    const file = std.fs.cwd().openFile(path, .{}) catch |err| switch (err) {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const content = std.Io.Dir.cwd().readFileAlloc(io, path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.FileNotFound => return error.ConfigNotFound,
         else => return err,
     };
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
     defer allocator.free(content);
 
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch |err| switch (err) {

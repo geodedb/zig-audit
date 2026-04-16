@@ -129,9 +129,9 @@ pub const AuditLogger = struct {
             if (event.metadata) |metadata| {
                 json_util.freeJsonValue(self.allocator, metadata);
             }
-            var truncation_obj = std.json.ObjectMap.init(self.allocator);
-            try truncation_obj.put("_truncated", std.json.Value{ .bool = true });
-            try truncation_obj.put("_original_size", std.json.Value{ .integer = @intCast(estimated_size) });
+            var truncation_obj: std.json.ObjectMap = .empty;
+            try truncation_obj.put(self.allocator, "_truncated", std.json.Value{ .bool = true });
+            try truncation_obj.put(self.allocator, "_original_size", std.json.Value{ .integer = @intCast(estimated_size) });
             event.metadata = std.json.Value{ .object = truncation_obj };
         }
 
@@ -209,7 +209,7 @@ pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: *const config.Config)
 }
 
 test "estimateEventSize: small event stays under 8192" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -242,7 +242,7 @@ test "estimateEventSize: small event stays under 8192" {
 }
 
 test "estimateEventSize: large metadata exceeds 8192" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -254,12 +254,12 @@ test "estimateEventSize: large metadata exceeds 8192" {
     defer logger_inst.deinit();
 
     // Build metadata with a large value (>8 KiB)
-    var metadata_obj = std.json.ObjectMap.init(allocator);
+    var metadata_obj: std.json.ObjectMap = .empty;
     const big_value = try allocator.alloc(u8, 9000);
     defer allocator.free(big_value);
     @memset(big_value, 'x');
-    try metadata_obj.put("big_field", std.json.Value{ .string = big_value });
-    defer metadata_obj.deinit();
+    try metadata_obj.put(allocator, "big_field", std.json.Value{ .string = big_value });
+    defer metadata_obj.deinit(allocator);
     const metadata = std.json.Value{ .object = metadata_obj };
 
     const event = events.AuditEvent{
@@ -284,7 +284,7 @@ test "estimateEventSize: large metadata exceeds 8192" {
 }
 
 test "audit logger basic functionality" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 

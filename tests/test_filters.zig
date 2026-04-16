@@ -87,7 +87,7 @@ test "PEM private key detection" {
 }
 
 test "email masking" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -98,7 +98,7 @@ test "email masking" {
 }
 
 test "phone masking" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -109,7 +109,7 @@ test "phone masking" {
 }
 
 test "metadata filtering and redaction" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -136,13 +136,13 @@ test "metadata filtering and redaction" {
         .pci_mode = true,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("actor_id", std.json.Value{ .string = "test-user" });
-    try metadata_obj.put("password", std.json.Value{ .string = "secret123" });
-    try metadata_obj.put("unknown_field", std.json.Value{ .string = "value" });
-    try metadata_obj.put("secret_data", std.json.Value{ .string = "sensitive" });
+    try metadata_obj.put(allocator, "actor_id", std.json.Value{ .string = "test-user" });
+    try metadata_obj.put(allocator, "password", std.json.Value{ .string = "secret123" });
+    try metadata_obj.put(allocator, "unknown_field", std.json.Value{ .string = "value" });
+    try metadata_obj.put(allocator, "secret_data", std.json.Value{ .string = "sensitive" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -155,7 +155,7 @@ test "metadata filtering and redaction" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -213,7 +213,7 @@ test "expanded sensitive key detection" {
 test "recursive redaction of nested objects" {
     // GAP-008: {"user": {"password": "secret"}} with "user" allowed
     // should produce {"user": {"password": "[REDACTED]"}}
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -236,22 +236,22 @@ test "recursive redaction of nested objects" {
     };
 
     // Build inner object: {"password": "secret123"}
-    var inner_obj = std.json.ObjectMap.init(allocator);
-    try inner_obj.put("password", std.json.Value{ .string = "secret123" });
+    var inner_obj: std.json.ObjectMap = .empty;
+    try inner_obj.put(allocator, "password", std.json.Value{ .string = "secret123" });
 
     // Build outer: {"user": inner_obj}
-    var metadata_obj = std.json.ObjectMap.init(allocator);
+    var metadata_obj: std.json.ObjectMap = .empty;
     defer {
         // inner_obj is owned by metadata_obj, free inner first
         if (metadata_obj.get("user")) |v| {
             if (v == .object) {
                 var inner = @constCast(&v.object);
-                inner.deinit();
+                inner.deinit(allocator);
             }
         }
-        metadata_obj.deinit();
+        metadata_obj.deinit(allocator);
     }
-    try metadata_obj.put("user", std.json.Value{ .object = inner_obj });
+    try metadata_obj.put(allocator, "user", std.json.Value{ .object = inner_obj });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -264,7 +264,7 @@ test "recursive redaction of nested objects" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -294,7 +294,7 @@ test "recursive redaction of nested objects" {
 test "redaction of sensitive values in arrays" {
     // GAP-008: {"items": ["4111111111111111"]} with "items" allowed
     // should produce {"items": ["[REDACTED_PAN]"]}
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -323,9 +323,9 @@ test "redaction of sensitive values in arrays" {
     defer arr.deinit();
 
     // Build outer: {"items": arr}
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
-    try metadata_obj.put("items", std.json.Value{ .array = arr });
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "items", std.json.Value{ .array = arr });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -338,7 +338,7 @@ test "redaction of sensitive values in arrays" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -363,7 +363,7 @@ test "redaction of sensitive values in arrays" {
 test "deny pattern match without isSensitiveKey produces generic redaction" {
     // GAP-008 Q4: a key matching deny_key_patterns but not isSensitiveKey
     // should get [REDACTED] instead of being silently dropped
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -386,11 +386,11 @@ test "deny pattern match without isSensitiveKey produces generic redaction" {
         .pci_mode = false,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
     // "internal_data" matches deny pattern "internal" but not isSensitiveKey
-    try metadata_obj.put("internal_data", std.json.Value{ .string = "some-value" });
+    try metadata_obj.put(allocator, "internal_data", std.json.Value{ .string = "some-value" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -403,7 +403,7 @@ test "deny pattern match without isSensitiveKey produces generic redaction" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -425,7 +425,7 @@ test "deny pattern match without isSensitiveKey produces generic redaction" {
 test "pii_mode mask: email value is masked instead of fully redacted" {
     // GAP-007: When pii_mode == .mask, email values should be masked (***@domain)
     // instead of showing [REDACTED_EMAIL]
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -447,10 +447,10 @@ test "pii_mode mask: email value is masked instead of fully redacted" {
         .pci_mode = false,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("user_email", std.json.Value{ .string = "alice@example.com" });
+    try metadata_obj.put(allocator, "user_email", std.json.Value{ .string = "alice@example.com" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -463,7 +463,7 @@ test "pii_mode mask: email value is masked instead of fully redacted" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -483,7 +483,7 @@ test "pii_mode mask: email value is masked instead of fully redacted" {
 
 test "pii_mode mask: phone value is masked instead of fully redacted" {
     // GAP-007: When pii_mode == .mask, phone values should be masked (123***7890)
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -505,10 +505,10 @@ test "pii_mode mask: phone value is masked instead of fully redacted" {
         .pci_mode = false,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
-    try metadata_obj.put("contact_phone", std.json.Value{ .string = "123-456-7890" });
+    try metadata_obj.put(allocator, "contact_phone", std.json.Value{ .string = "123-456-7890" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -521,7 +521,7 @@ test "pii_mode mask: phone value is masked instead of fully redacted" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -541,7 +541,7 @@ test "pii_mode mask: phone value is masked instead of fully redacted" {
 test "pii_mode mask: key-based email detection with mask" {
     // GAP-007: When a key matches "email" via isSensitiveKey and pii_mode == .mask,
     // the email value should be masked
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -559,11 +559,11 @@ test "pii_mode mask: key-based email detection with mask" {
         .pci_mode = false,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
     // "email" key triggers isSensitiveKey -> .email
-    try metadata_obj.put("email", std.json.Value{ .string = "bob@test.org" });
+    try metadata_obj.put(allocator, "email", std.json.Value{ .string = "bob@test.org" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -576,7 +576,7 @@ test "pii_mode mask: key-based email detection with mask" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -597,7 +597,7 @@ test "pii_mode mask: key-based email detection with mask" {
 test "pii_mode off: email and phone values pass through when not key-matched" {
     // GAP-007: When pii_mode == .off, value-type detection for email/phone is skipped,
     // but key-name matches still cause redaction
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -619,11 +619,11 @@ test "pii_mode off: email and phone values pass through when not key-matched" {
         .pci_mode = false,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
     // "notes" is allowed and value is an email; with pii_mode off, it should pass through
-    try metadata_obj.put("notes", std.json.Value{ .string = "contact@example.com" });
+    try metadata_obj.put(allocator, "notes", std.json.Value{ .string = "contact@example.com" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -636,7 +636,7 @@ test "pii_mode off: email and phone values pass through when not key-matched" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -656,7 +656,7 @@ test "pii_mode off: email and phone values pass through when not key-matched" {
 
 test "pii_mode off: key-name email match still causes redaction" {
     // GAP-007: Even when pii_mode == .off, key-name matches still trigger redaction
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -674,11 +674,11 @@ test "pii_mode off: key-name email match still causes redaction" {
         .pci_mode = false,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
     // "email" key still triggers isSensitiveKey regardless of pii_mode
-    try metadata_obj.put("email", std.json.Value{ .string = "test@example.com" });
+    try metadata_obj.put(allocator, "email", std.json.Value{ .string = "test@example.com" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -691,7 +691,7 @@ test "pii_mode off: key-name email match still causes redaction" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -711,7 +711,7 @@ test "pii_mode off: key-name email match still causes redaction" {
 
 test "pci_mode true: PAN in allowed field is still redacted" {
     // GAP-007: When pci_mode is true, PAN detection overrides allow_fields
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -733,11 +733,11 @@ test "pci_mode true: PAN in allowed field is still redacted" {
         .pci_mode = true,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
     // "payment_info" is in allow_fields, but its value is a valid PAN
-    try metadata_obj.put("payment_info", std.json.Value{ .string = "4111111111111111" });
+    try metadata_obj.put(allocator, "payment_info", std.json.Value{ .string = "4111111111111111" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -750,7 +750,7 @@ test "pci_mode true: PAN in allowed field is still redacted" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -776,7 +776,7 @@ test "pci_mode false: PAN in allowed field passes through" {
     // even for allowed fields. With pci_mode false, the allowed field goes to .allow
     // but then redactValueRecursive still detects the PAN value.
     // So the test verifies that with pci_mode off, value detection still works.
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -798,11 +798,11 @@ test "pci_mode false: PAN in allowed field passes through" {
         .pci_mode = false,
     };
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
 
     // "payment_info" is in allow_fields with pci_mode false
-    try metadata_obj.put("payment_info", std.json.Value{ .string = "4111111111111111" });
+    try metadata_obj.put(allocator, "payment_info", std.json.Value{ .string = "4111111111111111" });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -815,7 +815,7 @@ test "pci_mode false: PAN in allowed field passes through" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
@@ -836,7 +836,7 @@ test "pci_mode false: PAN in allowed field passes through" {
 
 test "pii_mode mask: email in array is masked" {
     // GAP-007: Email values in arrays should be masked when pii_mode == .mask
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -863,9 +863,9 @@ test "pii_mode mask: email in array is masked" {
     try arr.append(std.json.Value{ .string = "safe_text" });
     defer arr.deinit();
 
-    var metadata_obj = std.json.ObjectMap.init(allocator);
-    defer metadata_obj.deinit();
-    try metadata_obj.put("contacts", std.json.Value{ .array = arr });
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "contacts", std.json.Value{ .array = arr });
 
     const metadata = std.json.Value{ .object = metadata_obj };
 
@@ -878,7 +878,7 @@ test "pii_mode mask: email in array is masked" {
                 allocator.free(entry.key_ptr.*);
                 json_util.freeJsonValue(allocator, entry.value_ptr.*);
             }
-            obj_mut.deinit();
+            obj_mut.deinit(allocator);
         }
     };
 
