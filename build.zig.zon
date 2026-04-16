@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#530fb00e931a3bf21758e3d717dbde6f1dd84984",
-            .hash = "dns-0.1.0-x4U-zWzJEACVURZDhKC-DcSpbUr7YRydkAU9Uiy8mgjp",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#16d46e6dfb2f6832dc2b18f4b391abefcb9113c2",
+            .hash = "dns-0.1.0-x4U-zWrTEACPWb8pOxs1aVVNJjhc3-EpiS9w9ISCJTBM",
         },
     },
     .paths = .{
