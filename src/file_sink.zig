@@ -44,6 +44,8 @@ pub const FileSink = struct {
 
         if (file_config.enabled) {
             try sink.openCurrentFile();
+            // daemon: one persistent consumer per file sink. Same rationale as
+            // syslog.zig — long-lived ring-buffer consumer, not pool work.
             sink.thread = try std.Thread.spawn(.{}, workerThread, .{sink});
         }
 

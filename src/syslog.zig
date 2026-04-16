@@ -148,6 +148,10 @@ pub const SyslogSender = struct {
 
         if (sender.config.enabled) {
             log.warn("syslog transport using plaintext {s}; use TLS tunnel for encrypted transport", .{@tagName(syslog_config.protocol)});
+            // daemon: one persistent consumer per syslog sink; the worker loops
+            // on a ring buffer for the sink's lifetime. Not pool work — putting
+            // this on a bounded thread-pool would starve the pool since the
+            // worker never returns.
             sender.thread = try std.Thread.spawn(.{}, workerThread, .{sender});
         }
 
