@@ -49,6 +49,23 @@ pub const logger = @import("logger.zig");
 pub const ring_buffer = @import("ring_buffer.zig");
 pub const channel = @import("channel.zig");
 
+// Observability seam (otel). NAMED module — see `build.zig` for why we
+// can't use a relative `@import("observability.zig")` here. When
+// `-Dwith_otel=false` (the default), every public helper in this
+// module collapses to a comptime-known no-op and the otel dependency
+// is never resolved.
+pub const observability = @import("observability");
+
+// Bootstrap helper for `-Dwith_otel=true` builds. Gated through the
+// seam's compile-time `enabled` flag so the disabled build never
+// touches otel-namespaced identifiers. Consumers wire this up from
+// their `main()` once per process — see README "Observability"
+// section.
+pub const observability_init = if (observability.enabled)
+    @import("observability_init")
+else
+    struct {};
+
 // ── Convenience re-exports ──────────────────────────────────────────────
 
 pub const AuditEvent = events.AuditEvent;

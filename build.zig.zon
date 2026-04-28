@@ -8,6 +8,16 @@
             .url = "git+https://gitlab.com/devnw/zig/dns.git#3f4ff376433203021439eeb0785e2e0b1dc4c5cb",
             .hash = "dns-0.1.0-x4U-zRbYEADpx1_cj2pe_dES9O_B0-MjW-jA_g3hWXez",
         },
+        // Lazy: the package is only fetched when `-Dwith_otel=true` —
+        // `b.lazyDependency("otel", ...)` short-circuits the resolution
+        // when the build option is off, keeping the disabled build
+        // dependency-free (and the symbol set otel-free, verified by
+        // `otel/scripts/verify-consumer-noop.sh`).
+        .otel = .{
+            .url = "git+https://gitlab.com/devnw/zig/otel#20078af231c069d88eaeb79dcf950b94366be624",
+            .hash = "otel-0.1.0-B0v3lsl9MwCHrG8GDrxdFebugqjybfr4KAiplOJKCRG7",
+            .lazy = true,
+        },
     },
     .paths = .{
         "build.zig",
