@@ -12,6 +12,11 @@ const json_util = @import("json_util.zig");
 const syslog = @import("syslog.zig");
 const file_sink = @import("file_sink.zig");
 const time = @import("time.zig");
+// Observability seam (otel). NAMED module — see `build.zig` /
+// `src/observability.zig` for the no-op invariants. When
+// `-Dwith_otel=false`, every helper here compiles to a comptime-known
+// no-op and is eliminated by the optimizer.
+const observability = @import("observability");
 
 pub const AuditLogger = struct {
     allocator: std.mem.Allocator,
@@ -72,6 +77,34 @@ pub const AuditLogger = struct {
     }
 
     pub fn audit(self: *AuditLogger, ev: *const events.AuditEvent) !void {
+        // Compose the event-kind label for the observability span.
+        // Bound: `category` and `action` are each capped at
+        // `events.AuditEvent.MAX_FIELD_LEN = 1024`, so
+        // `"{category}.{action}"` fits in 2049 bytes. We size the
+        // buffer with headroom and fall back to `"record"` if the
+        // (impossible-after-validate) overflow path fires.
+        //
+        // PII INVARIANT: only `category` + `action` participate in
+        // the kind label. `actor_id`, `subject_id`, `source_ip`,
+        // `metadata`, etc. — fields that frequently carry PII — are
+        // NEVER copied into span attributes.
+        var event_kind_buf: [2080]u8 = undefined;
+        const event_kind = std.fmt.bufPrint(
+            event_kind_buf[0..],
+            "{s}.{s}",
+            .{ ev.category, ev.action },
+        ) catch "record";
+        const span = observability.startAuditRecordSpan(event_kind);
+        // Status defaults: span ends as `error` / non-durable unless
+        // the success path overrides them. The `defer` below fires on
+        // every exit (early-return, propagated error, normal end);
+        // `endAuditRecordSpan` itself calls `span.end(null)`, so
+        // there's no separate `defer span.end(null)` here — that
+        // would double-end.
+        var span_ok: bool = false;
+        var span_durable: bool = false;
+        defer observability.endAuditRecordSpan(span, span_ok, span_durable);
+
         try ev.validate();
         var event = try ev.clone(self.allocator);
         defer event.freeCloned(self.allocator);
@@ -102,11 +135,17 @@ pub const AuditLogger = struct {
             json_util.freeJsonValue(self.allocator, fm);
         };
 
-        // If filtering resulted in dropping the event, log error and return
+        // If filtering resulted in dropping the event, log error and return.
+        // The function honoured the redaction policy successfully
+        // (`span_ok = true`), but the audit record never reached a
+        // sink (`span_durable = false`). Operators can spot dropped
+        // records by filtering for `audit.durable=false`.
         if (event.metadata != null and filtered_metadata == null) {
             if (self.file_sink) |sink| {
                 try sink.writeError("Event dropped due to unredactable sensitive content");
             }
+            span_ok = true;
+            span_durable = false;
             return;
         }
 
@@ -155,6 +194,13 @@ pub const AuditLogger = struct {
         // Propagate errors: prefer syslog error since it likely indicates OOM
         if (syslog_err) |err| return err;
         if (file_err) |err| return err;
+
+        // Success path: both sinks accepted the record (or were
+        // disabled), so the record is considered durable. The
+        // deferred `endAuditRecordSpan` reads these values when the
+        // function returns normally.
+        span_ok = true;
+        span_durable = true;
     }
 
     /// Estimate the serialized JSON size of an audit event without building a
