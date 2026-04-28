@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#3f4ff376433203021439eeb0785e2e0b1dc4c5cb",
-            .hash = "dns-0.1.0-x4U-zRbYEADpx1_cj2pe_dES9O_B0-MjW-jA_g3hWXez",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#c21dfbf3dd85184d1ee45b7a3c41d8b94b047f94",
+            .hash = "dns-0.1.0-x4U-zQE4EQDXyBQvelSRtpxuNlmfGzQFC9jfMAzNdC_n",
         },
         // Lazy: the package is only fetched when `-Dwith_otel=true` —
         // `b.lazyDependency("otel", ...)` short-circuits the resolution
