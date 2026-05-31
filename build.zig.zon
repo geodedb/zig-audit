@@ -1,12 +1,12 @@
 .{
     .name = .audit,
-    .version = "0.1.5",
+    .version = "0.1.6",
     .fingerprint = 0x9218ff7908edd427,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git#02c0ead0fd6757e8f087c8db71cc30f90853f92f",
-            .hash = "dns-0.1.7-x4U-zZg-EQDgSh8hT9gcDCnVuPNtMWIkqaq8IbyIPggl",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git#v0.1.8",
+            .hash = "dns-0.1.8-x4U-zXY-EQBVYe7Knq3VQBVY0gzm-md8qZIYBxGjIXqi",
         },
         // Lazy: the package is only fetched when `-Dwith_otel=true` —
         // `b.lazyDependency("otel", ...)` short-circuits the resolution
@@ -14,8 +14,8 @@
         // dependency-free (and the symbol set otel-free, verified by
         // `otel/scripts/verify-consumer-noop.sh`).
         .otel = .{
-            .url = "git+https://gitlab.com/devnw/zig/otel.git#455ad2b8fb6888d5dab48a0a5bdcc81fd225f635",
-            .hash = "otel-0.1.5-B0v3lvEMNAC40_D5FfUJgpR3hR8nP5R4IKg31uJmpk-y",
+            .url = "git+https://gitlab.com/devnw/zig/otel.git#v0.1.7",
+            .hash = "otel-0.1.7-B0v3lvwMNABbcgWlpbEityFzWmMeqp2H-G5PKV4YonCx",
             .lazy = true,
         },
     },
