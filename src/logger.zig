@@ -203,6 +203,9 @@ pub const AuditLogger = struct {
                 errdefer self.allocator.free(key);
                 try truncation_obj.put(self.allocator, key, std.json.Value{ .integer = @intCast(estimated_size) });
             }
+            // The errdefer above dies with this block: once `truncation_obj`
+            // is stored here, ownership transfers to `event.metadata` and the
+            // deferred `event.freeCloned` is responsible for freeing it.
             event.metadata = std.json.Value{ .object = truncation_obj };
         }
 
@@ -287,6 +290,14 @@ pub const AuditLogger = struct {
 /// by the returned logger (freed in `deinit()`), so the vtable contexts
 /// remain valid for the logger's whole lifetime.
 pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: config.Config) !*AuditLogger {
+    // We own `cfg` from the moment we're called, so every error path below
+    // must release its heap members. `Config.deinit` takes `*Config` and Zig
+    // parameters are immutable, so copy to a local first. `AuditLogger.init`
+    // never deinits the config on its own failure paths (it only stores it on
+    // success), so this errdefer cannot double-free.
+    var owned_cfg = cfg;
+    errdefer owned_cfg.deinit();
+
     const sys_clock = try allocator.create(time.SystemClock);
     errdefer allocator.destroy(sys_clock);
     sys_clock.* = time.SystemClock{};
@@ -295,7 +306,7 @@ pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: config.Config) !*Audi
     errdefer allocator.destroy(sys_id_gen);
     sys_id_gen.* = time.SystemIdGen.init();
 
-    const logger = try AuditLogger.init(allocator, cfg, sys_clock.clock(), sys_id_gen.idGen());
+    const logger = try AuditLogger.init(allocator, owned_cfg, sys_clock.clock(), sys_id_gen.idGen());
     logger.owned_system_clock = sys_clock;
     logger.owned_system_id_gen = sys_id_gen;
     return logger;
@@ -333,6 +344,24 @@ test "buildAuditLogger: system idgen survives the builder frame (QR-001)" {
         .metadata = null,
     };
     try logger.audit(&event);
+}
+
+test "buildAuditLogger: config does not leak when AuditLogger.init fails" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var test_config = try config.loadTestConfig(allocator);
+    // Force a deterministic AuditLogger.init failure: SyslogSender.init
+    // rejects `.tls` with error.TlsNotSupported before allocating anything
+    // it doesn't clean up itself. The syslog sink initializes before the
+    // file sink, so no filesystem state is touched.
+    test_config.sinks.syslog.protocol = .tls;
+
+    const result = buildAuditLogger(allocator, test_config);
+    try std.testing.expectError(error.TlsNotSupported, result);
+    // DebugAllocator's deinit (deferred above) fails the test if the
+    // config's heap members leaked on the error path.
 }
 
 test "estimateEventSize: small event stays under 8192" {
