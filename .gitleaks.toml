@@ -13,4 +13,5 @@ paths = [
     '''zig-out''',
     '''\.git''',
     '''tests/test_filters\.zig''',
+    '''tests/integration\.zig''',
 ]

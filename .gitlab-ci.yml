@@ -6,25 +6,38 @@ default:
   tags:
     - company
 
+# GAP-064: components pinned to full commit SHAs (immutable) instead of
+# mutable tags. The tag each SHA corresponds to is kept as a comment.
+#   41983cfbddfe06a5e6e3c126a7f16404d36c7ef9 = v1.7.1
+#   d421e26e2e02e8449b295e1f2f047ec58128f1a5 = v1.2.1
 include:
   # Security scanning
-  - component: gitlab.com/devnw/ci-catalog/security-sast@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-sast@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
 
   # Code quality
-  - component: gitlab.com/devnw/ci-catalog/zig-format@v1.2.1
+  - component: gitlab.com/devnw/ci-catalog/zig-format@d421e26e2e02e8449b295e1f2f047ec58128f1a5  # v1.2.1
 
   # SBOM
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
 
   # Release
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
 
 variables:
   ZIG_VERSION: "0.16.0"
+  # GAP-065: expected SHA-256 of the Zig toolchain tarball, pinned per
+  # architecture so verification does not trust ziglang.org (the same origin
+  # that serves the tarball) at download time. When bumping ZIG_VERSION,
+  # update these from https://ziglang.org/download/index.json (the `shasum`
+  # field). If left empty, .install-zig falls back to fetching index.json,
+  # which is same-origin verification only — operators should keep these
+  # pinned.
+  ZIG_TARBALL_SHA256_X86_64: "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00"
+  ZIG_TARBALL_SHA256_AARCH64: "ea4b09bfb22ec6f6c6ceac57ab63efb6b46e17ab08d21f69f3a48b38e1534f17"
 
 stages:
   - lint
@@ -35,16 +48,21 @@ stages:
   - sbom
   - release
 
-# Zig installation template (SEC-R6-02: SHA-256 verified via ziglang.org index)
+# Zig installation template (SEC-R6-02, GAP-065).
+# Tarball verification prefers the pinned ZIG_TARBALL_SHA256_* CI variables
+# (independent of the download origin). Only when the pin for the current
+# architecture is empty does it fall back to fetching the expected hash from
+# ziglang.org's index.json — same-origin verification, weaker; operators
+# should keep the pins populated.
 .install-zig: &install-zig
   - apt-get update && apt-get install -y curl xz-utils python3
   - |
     if [ ! -f "zig-${ZIG_VERSION}/zig" ]; then
       ARCH=$(uname -m)
       case "$ARCH" in
-        x86_64)  ZIG_ARCH="x86_64" ;;
-        aarch64) ZIG_ARCH="aarch64" ;;
-        arm64)   ZIG_ARCH="aarch64" ;;
+        x86_64)  ZIG_ARCH="x86_64"; PINNED_SHA="${ZIG_TARBALL_SHA256_X86_64:-}" ;;
+        aarch64) ZIG_ARCH="aarch64"; PINNED_SHA="${ZIG_TARBALL_SHA256_AARCH64:-}" ;;
+        arm64)   ZIG_ARCH="aarch64"; PINNED_SHA="${ZIG_TARBALL_SHA256_AARCH64:-}" ;;
         *)       echo "Unsupported architecture: $ARCH"; exit 1 ;;
       esac
       MAJOR=$(echo "$ZIG_VERSION" | cut -d. -f1)
@@ -55,10 +73,15 @@ stages:
         ARCHIVE_NAME="zig-${ZIG_ARCH}-linux-${ZIG_VERSION}"
       fi
       TARBALL="${ARCHIVE_NAME}.tar.xz"
-      INDEX_FILE=$(mktemp)
-      curl -fsSL "https://ziglang.org/download/index.json" -o "${INDEX_FILE}"
-      EXPECTED_HASH=$(ZIG_VER="${ZIG_VERSION}" ZIG_ARCH_KEY="${ZIG_ARCH}-linux" ZIG_IDX="${INDEX_FILE}" \
-        python3 -c "
+      if [ -n "${PINNED_SHA}" ]; then
+        EXPECTED_HASH="${PINNED_SHA}"
+        echo "Using pinned SHA-256 for ${ZIG_ARCH}-linux-${ZIG_VERSION}"
+      else
+        echo "WARNING: no pinned ZIG_TARBALL_SHA256 for ${ZIG_ARCH}; falling back to index.json (same-origin verification)"
+        INDEX_FILE=$(mktemp)
+        curl -fsSL "https://ziglang.org/download/index.json" -o "${INDEX_FILE}"
+        EXPECTED_HASH=$(ZIG_VER="${ZIG_VERSION}" ZIG_ARCH_KEY="${ZIG_ARCH}-linux" ZIG_IDX="${INDEX_FILE}" \
+          python3 -c "
     import json, os, sys
     idx = json.load(open(os.environ['ZIG_IDX']))
     pkg = idx.get(os.environ['ZIG_VER'], {}).get(os.environ['ZIG_ARCH_KEY'], {})
@@ -66,7 +89,8 @@ stages:
     if not h: sys.exit('SHA-256 not found for ' + os.environ['ZIG_VER'] + '/' + os.environ['ZIG_ARCH_KEY'])
     print(h)
     ")
-      rm -f "${INDEX_FILE}"
+        rm -f "${INDEX_FILE}"
+      fi
       curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${TARBALL}" -o "${TARBALL}"
       echo "${EXPECTED_HASH}  ${TARBALL}" | sha256sum --check --strict
       tar -xJf "${TARBALL}"
@@ -76,16 +100,37 @@ stages:
   - export PATH="$PWD/zig-${ZIG_VERSION}:$PATH"
   - zig version
 
+# GAP-070: cache the verified Zig toolchain install and the incremental
+# build cache across jobs/pipelines, keyed by toolchain version.
+.zig-cache: &zig-cache
+  key: zig-$ZIG_VERSION
+  paths:
+    - zig-$ZIG_VERSION/
+    - .zig-cache/
+
 # Override zig-format component to use the project's ZIG_VERSION.
 # The v1.2.1 component defaults to 0.14.0 and does not accept a version input.
 zig-format:
+  cache: *zig-cache
   before_script:
     - *install-zig
+
+# GAP-071: lint gate for the Python tooling under scripts/.
+# ruff version pinned to match .pre-commit-config.yaml (ruff-pre-commit v0.14.14).
+python-lint:
+  stage: lint
+  image: python:3.12-slim
+  before_script:
+    - pip install ruff==0.14.14
+  script:
+    - ruff check scripts/
+    - ruff format --check scripts/
 
 # Build job
 build:
   stage: build
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -95,6 +140,7 @@ build:
 test-integration:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -106,6 +152,7 @@ test-integration:
 test-release-safe:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -117,6 +164,7 @@ test-release-safe:
 test-release-fast:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -127,6 +175,7 @@ test-release-fast:
 test-integration-release-safe:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -137,6 +186,7 @@ test-integration-release-safe:
 test-integration-release-fast:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -148,6 +198,7 @@ test-integration-release-fast:
 test-release-small:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -165,6 +216,7 @@ test-release-small:
 fuzz:
   stage: fuzz
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
@@ -187,6 +239,7 @@ fuzz:
 test:
   stage: test
   image: debian:bookworm-slim
+  cache: *zig-cache
   before_script:
     - *install-zig
   script:
