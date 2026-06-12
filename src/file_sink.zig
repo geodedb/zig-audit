@@ -15,6 +15,10 @@ const log = std.log.scoped(.audit);
 
 const FILE_QUEUE_SIZE = 10000;
 
+/// PR-012: maximum number of queued lines the worker coalesces into a
+/// single buffered write between channel receives.
+const DRAIN_BATCH_CAP = 256;
+
 /// One-time-per-process flag for the absolute-path-without-jail notice in
 /// `validatePath` (rotation re-validates, so without this the message would
 /// repeat on every rotation).
@@ -138,12 +142,103 @@ pub const FileSink = struct {
     /// Background worker: receives formatted lines from the channel and writes
     /// them to the file. Handles rotation and fsync. Exits when channel is
     /// closed and fully drained.
+    ///
+    /// PR-012: blocks for the first line, then opportunistically drains up to
+    /// DRAIN_BATCH_CAP queued lines and writes them as one batch through a
+    /// reusable buffer. Close-with-drain is preserved: receive() keeps
+    /// returning items after close until the channel is empty.
     fn workerThread(self: *FileSink) void {
-        while (self.ch.receive()) |line| {
+        var write_buf: std.ArrayList(u8) = .empty;
+        defer write_buf.deinit(self.allocator);
+        var batch: [DRAIN_BATCH_CAP][]const u8 = undefined;
+
+        while (self.ch.receive()) |first| {
+            batch[0] = first;
+            var n: usize = 1;
+            while (n < DRAIN_BATCH_CAP) : (n += 1) {
+                batch[n] = self.ch.tryReceive() orelse break;
+            }
+            self.writeBatch(batch[0..n], &write_buf);
+        }
+    }
+
+    /// Write one drained batch, consuming (freeing) every line.
+    ///
+    /// `.per_event` keeps its durability contract — one write and one fsync
+    /// per LINE — so it never coalesces. `.periodic`/`.none` coalesce the
+    /// batch into buffered writes and make a single fsync decision per batch
+    /// (periodic still counts RECORDS, not batches). Write failures are
+    /// logged per line/batch, matching the previous per-line behavior.
+    fn writeBatch(self: *FileSink, lines: []const []const u8, write_buf: *std.ArrayList(u8)) void {
+        if (self.config.sync_mode == .per_event) {
+            for (lines) |line| {
+                defer self.allocator.free(line);
+                self.writeLine(line) catch |err| {
+                    log.warn("file sink write error: {s}", .{@errorName(err)});
+                };
+            }
+            return;
+        }
+
+        write_buf.clearRetainingCapacity();
+        for (lines) |line| {
             defer self.allocator.free(line);
-            self.writeLine(line) catch |err| {
+            self.bufferLine(write_buf, line) catch |err| {
                 log.warn("file sink write error: {s}", .{@errorName(err)});
             };
+        }
+        self.flushBuffer(write_buf) catch |err| {
+            log.warn("file sink write error: {s}", .{@errorName(err)});
+        };
+
+        if (self.current_file) |file| {
+            self.maybeFsyncBatch(file, lines.len) catch |err| {
+                log.warn("file sink fsync error: {s}", .{@errorName(err)});
+            };
+        }
+    }
+
+    /// Append one line to the reusable batch buffer. When the bytes already
+    /// on disk plus the buffered bytes plus this line would exceed max_bytes,
+    /// flush the buffer first (so rotation sees an accurate current_size),
+    /// then rotate if this line still does not fit (QR-009 semantics:
+    /// rotation happens BEFORE the write that would exceed max_bytes).
+    fn bufferLine(self: *FileSink, write_buf: *std.ArrayList(u8), line: []const u8) !void {
+        if (self.current_size + write_buf.items.len + line.len > self.config.max_bytes) {
+            try self.flushBuffer(write_buf);
+            try self.checkRotation(line.len);
+        }
+        try write_buf.appendSlice(self.allocator, line);
+    }
+
+    /// Write the buffered bytes in one streaming write and clear the buffer,
+    /// retaining its capacity for the next batch.
+    fn flushBuffer(self: *FileSink, write_buf: *std.ArrayList(u8)) !void {
+        if (write_buf.items.len == 0) return;
+        defer write_buf.clearRetainingCapacity();
+        if (self.current_file) |file| {
+            try file.writeStreamingAll(systemIo(), write_buf.items);
+            self.current_size += write_buf.items.len;
+        }
+    }
+
+    /// Per-batch fsync decision for `.periodic`/`.none`. Periodic counting
+    /// stays per-record: sync_interval means "every N records", so the whole
+    /// batch length is added before the threshold check. `.per_event` never
+    /// reaches here (writeBatch handles it per line via writeLine/maybeFsync).
+    fn maybeFsyncBatch(self: *FileSink, file: std.Io.File, batch_len: usize) !void {
+        switch (self.config.sync_mode) {
+            .per_event => unreachable,
+            .periodic => {
+                // Saturating add: batch_len is at most DRAIN_BATCH_CAP, but a
+                // maxInt sync_interval must not let the counter overflow.
+                self.writes_since_sync +|= @intCast(@min(batch_len, std.math.maxInt(u32)));
+                if (self.writes_since_sync >= self.config.sync_interval) {
+                    try file.sync(systemIo());
+                    self.writes_since_sync = 0;
+                }
+            },
+            .none => {},
         }
     }
 
@@ -792,6 +887,149 @@ test "PR-006a: on-disk content has exactly one newline per record and no blank l
     try testing.expect(content.len > 0 and content[content.len - 1] == '\n');
     try testing.expect(content[0] != '\n');
     try testing.expect(std.mem.indexOf(u8, content, "\n\n") == null);
+}
+
+test "PR-012: 500-write burst drains fully through the worker (close-with-drain)" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
+    const test_dir = "zig-out/tmp/test-pr012-burst";
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/audit.log",
+        .max_bytes = 64 * 1024 * 1024,
+        .backup_count = 0,
+        .sync_mode = .none,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+
+    const burst = 500;
+    var i: u32 = 0;
+    while (i < burst) : (i += 1) {
+        const event = events.AuditEvent{
+            .category = "test",
+            .action = "burst",
+            .outcome = .success,
+            .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+            .severity = .INFO,
+            .actor_id = "test-user",
+            .subject_id = null,
+            .request_id = null,
+            .session_id = null,
+            .source_ip = null,
+            .trace_id = null,
+            .span_id = null,
+            .metadata = null,
+        };
+        try testing.expectEqual(events.SendStatus.enqueued, try sink.write(&event, null));
+    }
+
+    // deinit closes the channel; the worker must drain everything queued
+    // (including mid-batch) before exiting.
+    sink.deinit();
+
+    const content = try cwd.readFileAlloc(io, test_dir ++ "/audit.log", allocator, .limited(64 * 1024 * 1024));
+    defer allocator.free(content);
+    var line_count: u32 = 0;
+    var iter = std.mem.splitScalar(u8, content, '\n');
+    while (iter.next()) |line| {
+        if (line.len > 0) line_count += 1;
+    }
+    try testing.expectEqual(@as(u32, burst), line_count);
+}
+
+test "PR-012: mid-batch rotations lose no records (50-line burst across backups)" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
+    const test_dir = "zig-out/tmp/test-pr012-midbatch-rotate";
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    // max_bytes small enough that a 50-line burst (each record ~140 bytes)
+    // forces many rotations while the worker drains a single batch.
+    // backup_count is high enough that no backup is ever shifted off the end.
+    const backup_count = 25;
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/audit.log",
+        .max_bytes = 512,
+        .backup_count = backup_count,
+        .sync_mode = .none,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+
+    const burst = 50;
+    var i: u32 = 0;
+    while (i < burst) : (i += 1) {
+        const event = events.AuditEvent{
+            .category = "test",
+            .action = "mid_batch_rotation",
+            .outcome = .success,
+            .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+            .severity = .INFO,
+            .actor_id = "test-user",
+            .subject_id = null,
+            .request_id = null,
+            .session_id = null,
+            .source_ip = null,
+            .trace_id = null,
+            .span_id = null,
+            .metadata = null,
+        };
+        try testing.expectEqual(events.SendStatus.enqueued, try sink.write(&event, null));
+    }
+
+    sink.deinit();
+
+    // Count records across the live file plus every backup; nothing may be
+    // lost or duplicated by rotation mid-batch, and no file may exceed
+    // max_bytes.
+    var total_lines: u32 = 0;
+    var rotated_files: u32 = 0;
+    var path_buf: [256]u8 = undefined;
+    var file_idx: u32 = 0;
+    while (file_idx <= backup_count) : (file_idx += 1) {
+        const path = if (file_idx == 0)
+            test_dir ++ "/audit.log"
+        else
+            try std.fmt.bufPrint(&path_buf, "{s}/audit.log.{d}", .{ test_dir, file_idx });
+
+        const content = cwd.readFileAlloc(io, path, allocator, .limited(1048576)) catch continue;
+        defer allocator.free(content);
+        if (file_idx > 0) rotated_files += 1;
+
+        try testing.expect(content.len <= file_config.max_bytes);
+        var iter = std.mem.splitScalar(u8, content, '\n');
+        while (iter.next()) |line| {
+            if (line.len > 0) total_lines += 1;
+        }
+    }
+
+    try testing.expectEqual(@as(u32, burst), total_lines);
+    // The burst must actually have forced multiple rotations.
+    try testing.expect(rotated_files >= 2);
 }
 
 test "GAP-063: fresh audit file has mode 0o640" {
