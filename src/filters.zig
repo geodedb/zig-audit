@@ -494,11 +494,16 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
 
     if (is_denied or sensitive_token != null) {
         if (value == .string) {
-            const str_value = value.string;
-            // NOTE: This condition is currently unreachable because isPemPrivateKey
-            // checks for "-----BEGIN" — it exists as a forward-looking guard for
-            // future PEM detection changes that might not require that prefix.
-            if (isPemPrivateKey(str_value) and !std.mem.startsWith(u8, str_value, "-----BEGIN")) {
+            // GAP-061: a PEM private key under a sensitive/denied key is
+            // unredactable content — drop the whole event (fail closed)
+            // rather than emit anything alongside key material.
+            //
+            // Documented asymmetry: a PEM caught purely by VALUE detection
+            // under a non-sensitive, non-denied key (the fall-through paths
+            // below and redactValueRecursive for nested values) is redacted
+            // to [REDACTED_PK] instead — the key carries no sensitive
+            // intent, so the rest of the event is presumed safe to keep.
+            if (isPemPrivateKey(value.string)) {
                 return .drop_event;
             }
         }

@@ -1108,3 +1108,139 @@ test "pii_mode hash: key-token email path hashes instead of masking (GAP-050)" {
     defer allocator.free(fallback);
     try testing.expectEqualStrings("[REDACTED_EMAIL]", fallback);
 }
+
+test "GAP-061: PEM private key under a sensitive key drops the whole event" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &.{},
+        .deny_key_patterns = &.{},
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAy8Dbq...\n-----END RSA PRIVATE KEY-----";
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "private_key", std.json.Value{ .string = pem });
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    // A real PEM private key under a sensitive key is unredactable content:
+    // the whole event must be dropped (fail closed), never emitted.
+    const filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    try testing.expect(filtered == null);
+}
+
+test "GAP-061: PEM private key under a denied key pattern drops the whole event" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var deny_patterns = [_][]const u8{"cert"};
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &.{},
+        .deny_key_patterns = &deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    const pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcw...\n-----END PRIVATE KEY-----";
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "cert_key", std.json.Value{ .string = pem });
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    const filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    try testing.expect(filtered == null);
+}
+
+test "GAP-061: PEM under a non-sensitive key is redacted to a token, not dropped" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Documented asymmetry: drop_event only fires for sensitive/denied keys.
+    // A PEM caught purely by value detection under an innocuous key is
+    // redacted to [REDACTED_PK] and the event survives.
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &.{},
+        .deny_key_patterns = &.{},
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAy8Dbq...\n-----END RSA PRIVATE KEY-----";
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "notes", std.json.Value{ .string = pem });
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit(allocator);
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        try testing.expect(f == .object);
+        const value = f.object.get("notes").?;
+        try testing.expectEqualStrings("[REDACTED_PK]", value.string);
+        try testing.expect(std.mem.indexOf(u8, value.string, "BEGIN") == null);
+    }
+}
+
+test "GAP-061: non-PEM value under a sensitive private-key key is redacted, not dropped" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Pins the integration "fail closed" contract: a private_key field whose
+    // value is NOT a valid PEM block is redacted (the event survives).
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &.{},
+        .deny_key_patterns = &.{},
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "private_key", std.json.Value{ .string = "raw_key_bytes_without_pem_markers_12345" });
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit(allocator);
+        }
+    };
+
+    try testing.expect(filtered != null);
+    if (filtered) |f| {
+        const value = f.object.get("private_key").?;
+        try testing.expectEqualStrings("[REDACTED_PK]", value.string);
+    }
+}
