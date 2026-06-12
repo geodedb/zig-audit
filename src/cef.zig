@@ -219,6 +219,14 @@ fn escapeKey(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
 /// All other C0 control bytes (0x00-0x1F) and DEL (0x7F) are neutralized to
 /// `\xNN` hex escapes in both modes (GAP-042/A3) so no raw control byte can
 /// reach a log sink and forge or corrupt records.
+///
+/// NOTE: `\xNN` is NOT part of the ArcSight CEF v0 specification — it is a
+/// non-standard neutralization. Strict CEF parsers will surface the literal
+/// four-character sequence (backslash, 'x', hex, hex) rather than decode it.
+/// The output stays unambiguous because backslash is always escaped first
+/// (`\` -> `\\`): a single-backslash `\xNN` in escaped output can only mean
+/// a neutralized control byte, never input that literally contained "\xNN"
+/// (which arrives as `\\xNN`).
 pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_header: bool) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, input.len + 16);
     errdefer result.deinit(allocator);
@@ -308,6 +316,25 @@ test "escapeCefString: header escapes backslash and pipe" {
     const r4 = try escapeCefString(allocator, "line1\nline2\rline3", true);
     defer allocator.free(r4);
     try testing.expectEqualStrings("line1 line2 line3", r4);
+}
+
+test "escapeCefString: literal backslash-x sequence is distinguishable from neutralized control bytes" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Input containing the LITERAL four characters backslash,'x','0','7':
+    // the backslash is escaped to "\\", so the output is "\\x07" — never
+    // confusable with the "\x07" produced by neutralizing a raw BEL byte.
+    const literal = try escapeCefString(allocator, "\\x07", false);
+    defer allocator.free(literal);
+    try testing.expectEqualStrings("\\\\x07", literal);
+
+    // A raw BEL control byte (0x07) neutralizes to single-backslash "\x07".
+    const neutralized = try escapeCefString(allocator, "\x07", false);
+    defer allocator.free(neutralized);
+    try testing.expectEqualStrings("\\x07", neutralized);
 }
 
 test "escapeCefString: extension value escapes backslash, equals, and newlines" {

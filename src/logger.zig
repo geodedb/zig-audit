@@ -316,6 +316,9 @@ pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: config.Config) !*Audi
     sys_id_gen.* = time.SystemIdGen.init();
 
     const logger = try AuditLogger.init(allocator, owned_cfg, sys_clock.clock(), sys_id_gen.idGen());
+    // SAFETY: no fallible operations between init() and return; adding any
+    // would require cancelling these errdefers (they alias memory now owned
+    // by the logger).
     logger.owned_system_clock = sys_clock;
     logger.owned_system_id_gen = sys_id_gen;
     return logger;

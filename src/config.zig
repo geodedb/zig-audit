@@ -259,12 +259,22 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     };
     if (ver != 1) return error.UnsupportedVersion;
 
+    // ADV-1: every dupe below is paired with an errdefer so a mid-parse
+    // error (wrong type, out-of-range integer, OOM, ...) frees everything
+    // allocated so far. On success none of them fire and ownership of all
+    // heap members transfers to the returned Config (freed by its deinit).
+    // Mirrors the errdefer-chain style of events.zig clone().
+
     const service_value = root_obj.get("service") orelse return error.MissingService;
     if (service_value != .object) return error.InvalidConfig;
     const service_obj = service_value.object;
+    const service_name = try allocator.dupe(u8, try jsonString(service_obj, "name"));
+    errdefer allocator.free(service_name);
+    const service_host = try allocator.dupe(u8, try jsonString(service_obj, "host"));
+    errdefer allocator.free(service_host);
     const service = ServiceConfig{
-        .name = try allocator.dupe(u8, try jsonString(service_obj, "name")),
-        .host = try allocator.dupe(u8, try jsonString(service_obj, "host")),
+        .name = service_name,
+        .host = service_host,
         .pid = try jsonIntegerInRange(u32, service_obj, "pid"),
     };
 
@@ -272,11 +282,17 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     if (identity_value != .object) return error.InvalidConfig;
     const identity_obj = identity_value.object;
     const cef_obj = try jsonObject(identity_obj, "cef");
+    const cef_vendor = try allocator.dupe(u8, try jsonString(cef_obj, "vendor"));
+    errdefer allocator.free(cef_vendor);
+    const cef_product = try allocator.dupe(u8, try jsonString(cef_obj, "product"));
+    errdefer allocator.free(cef_product);
+    const cef_version = try allocator.dupe(u8, try jsonString(cef_obj, "version"));
+    errdefer allocator.free(cef_version);
     const identity = IdentityConfig{
         .cef = CefIdentityConfig{
-            .vendor = try allocator.dupe(u8, try jsonString(cef_obj, "vendor")),
-            .product = try allocator.dupe(u8, try jsonString(cef_obj, "product")),
-            .version = try allocator.dupe(u8, try jsonString(cef_obj, "version")),
+            .vendor = cef_vendor,
+            .product = cef_product,
+            .version = cef_version,
         },
     };
 
@@ -302,10 +318,14 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
         if (val != .string) return error.InvalidConfig;
         break :blk try allocator.dupe(u8, val.string);
     };
+    errdefer if (allowed_base_dir) |base| allocator.free(base);
+
+    const file_path = try allocator.dupe(u8, try jsonString(file_obj, "path"));
+    errdefer allocator.free(file_path);
 
     const file_sink = FileSinkConfig{
         .enabled = try jsonBool(file_obj, "enabled"),
-        .path = try allocator.dupe(u8, try jsonString(file_obj, "path")),
+        .path = file_path,
         .max_bytes = try jsonIntegerInRange(u64, file_obj, "max_bytes"),
         .backup_count = try jsonIntegerInRange(u32, file_obj, "backup_count"),
         .sync_mode = sync_mode,
@@ -318,10 +338,12 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     const facility_str = try jsonString(rfc5424_obj, "facility");
     const port = try jsonIntegerInRange(u16, syslog_obj, "port");
     if (port == 0) return error.InvalidConfig;
+    const syslog_host = try allocator.dupe(u8, try jsonString(syslog_obj, "host"));
+    errdefer allocator.free(syslog_host);
     const syslog_sink = SyslogSinkConfig{
         .enabled = try jsonBool(syslog_obj, "enabled"),
         .protocol = try SyslogProtocol.fromString(try jsonString(syslog_obj, "protocol")),
-        .host = try allocator.dupe(u8, try jsonString(syslog_obj, "host")),
+        .host = syslog_host,
         .port = port,
         .rfc5424 = SyslogRfc5424Config{
             .facility = try SyslogFacility.fromString(facility_str),
@@ -339,16 +361,29 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
 
     const allow_fields_arr = try jsonArray(filters_obj, "allow_fields");
     const allow_fields = try allocator.alloc([]const u8, allow_fields_arr.items.len);
+    var allow_fields_count: usize = 0;
+    errdefer {
+        // Free only the populated prefix plus the slice itself.
+        for (allow_fields[0..allow_fields_count]) |field| allocator.free(field);
+        allocator.free(allow_fields);
+    }
     for (allow_fields_arr.items, 0..) |item, i| {
         if (item != .string) return error.InvalidConfig;
         allow_fields[i] = try allocator.dupe(u8, item.string);
+        allow_fields_count = i + 1;
     }
 
     const deny_patterns_arr = try jsonArray(filters_obj, "deny_key_patterns");
     const deny_patterns = try allocator.alloc([]const u8, deny_patterns_arr.items.len);
+    var deny_patterns_count: usize = 0;
+    errdefer {
+        for (deny_patterns[0..deny_patterns_count]) |pattern| allocator.free(pattern);
+        allocator.free(deny_patterns);
+    }
     for (deny_patterns_arr.items, 0..) |item, i| {
         if (item != .string) return error.InvalidConfig;
         deny_patterns[i] = try allocator.dupe(u8, item.string);
+        deny_patterns_count = i + 1;
     }
 
     const filters = FiltersConfig{
@@ -555,11 +590,9 @@ test "parseConfig parses sync_mode none" {
 }
 
 test "parseConfig rejects out-of-range integer fields (GAP-040/A1)" {
-    // parseConfig is not leak-safe on mid-parse errors (pre-existing: no
-    // errdefer on earlier dupes), so run the error cases under an arena.
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    // std.testing.allocator's leak check doubles as the regression proof
+    // that parseConfig frees every earlier dupe on mid-parse errors (ADV-1).
+    const allocator = std.testing.allocator;
 
     // Template: every integer field is substitutable so each case can
     // poison exactly one field while keeping the rest valid.
