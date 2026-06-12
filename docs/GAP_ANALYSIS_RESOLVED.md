@@ -318,6 +318,22 @@ Items closed or dispositioned during the 2026-03-22 extraction.
 - **Evidence:** `src/syslog.zig:deinit`, `src/file_sink.zig:deinit`, `src/channel.zig:close/receive`. Integration tests verify drain behavior.
 - **Resolved date:** 2026-03-30
 
+### GAP-020: fsync per event in file_sink [RESOLVED]
+
+- **Issue:** [#15](https://gitlab.com/devnw/zig/audit/-/issues/15) (closed)
+- **Category:** Performance
+- **Resolution:** A configurable `SyncMode` was added so callers choose per-event durability or periodic flushing instead of an unconditional `fsync` per write. Verified during the 2026-06-11 audit.
+- **Evidence:** `src/config.zig:88-108` defines the `SyncMode` enum and wiring; the file sink honors it on the write path.
+- **Resolved date:** 2026-06-11
+
+### GAP-021: New socket per UDP/TCP syslog message -- no connection reuse [RESOLVED]
+
+- **Issue:** [#16](https://gitlab.com/devnw/zig/audit/-/issues/16) (closed)
+- **Category:** Performance
+- **Resolution:** The syslog sender now maintains persistent UDP/TCP sockets with reconnect-on-error and caches DNS resolution instead of creating a socket and resolving the host per message. Verified during the 2026-06-11 audit.
+- **Evidence:** `src/syslog.zig:107-114` (persistent socket/connection state), `src/syslog.zig:235-247` (`resolveOrCached` DNS cache).
+- **Resolved date:** 2026-06-11
+
 ## Won't Do
 
 ### GAP-002: Geode DB adapter is mixed into the same package tree [WON'T DO]

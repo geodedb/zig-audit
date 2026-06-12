@@ -1,6 +1,6 @@
 # Security Gap Analysis
 
-Last updated: 2026-03-22
+Last updated: 2026-06-11
 
 Repository: `gitlab.com/devnw/zig/audit`
 Reviewer: benjiv
@@ -19,15 +19,35 @@ Scope: All source files in `src/` and `build.zig.zon`
 
 *Note: S12 (`i128`-to-`i64` cast) is moot after GAP-026/GAP-027 removed the dead code containing the cast.*
 
-**All Critical and High severity findings are resolved.**
+*2026-06-11 update: S9 and SC-1 are superseded by GAP-043 ([#62](https://gitlab.com/devnw/zig/audit/-/issues/62)) and GAP-045 ([#64](https://gitlab.com/devnw/zig/audit/-/issues/64)) respectively (still open; tracking continues under the new Gap-IDs). S11 and S13 remain open. Eight new appsec findings (A1-A8) and additional NEW-SEC items were filed -- see the "2026-06-11 Appsec Review" section below.*
+
+**All Critical and High severity findings from the original (2026-03-22) review are resolved.** The 2026-06-11 review filed one High security item (GAP-050, PiiMode.hash) and three Critical correctness/memory-safety items in the deep quality review (QR-001..003).
 
 **Remaining open findings** (Medium/Low, none blocking 0.1.0 release):
-1. **S9** (Medium) -- File path from config not sanitized (CWE-22)
-2. **SC-1** (Low) -- DNS dependency pinned to commit, not tag (blocked -- cross-repo)
-3. **S11** (Low) -- DNS queries unauthenticated (documentation-only fix)
-4. **S13** (Low) -- `@panic` in MockSyslogSender init (test code only)
+
+1. **S9** (Medium) -- File path from config not sanitized (CWE-22). **Superseded by GAP-043** ([#62](https://gitlab.com/devnw/zig/audit/-/issues/62), open): the `".."` substring mitigation is incomplete (absolute/symlink bypass).
+2. **SC-1** (Low) -- DNS dependency pin auditability. **Superseded by GAP-045** ([#64](https://gitlab.com/devnw/zig/audit/-/issues/64), open): ref/version-hash drift (`?ref=v0.1.9` vs `dns-0.1.8` hash). See also GAP-029 ([#24](https://gitlab.com/devnw/zig/audit/-/issues/24)).
+3. **S11** (Low) -- DNS queries unauthenticated (documentation-only fix). **Remains open.**
+4. **S13** (Low) -- `@panic` in MockSyslogSender init. **Remains open (test code only).**
 
 **No real secrets were found.** Two gitleaks findings on test fixtures (`TEST_TRACE_ID`, `TEST_SPAN_ID`) are confirmed false positives.
+
+### 2026-06-11 Appsec Review -- New Findings (A1-A8 -> GAP-040..047)
+
+The 2026-06-11 appsec review (`docs/APPSEC_REVIEW_2026-06-11.md`, OWASP Top 10:2025 / CIS v8.1.2) reconfirmed all prior Critical/High items (S1-S8, S10) as genuinely fixed and surfaced eight new/residual findings, now tracked as the GAP-040..047 master series:
+
+| Appsec ID | Title | Severity | Gap-ID | Issue |
+|-----------|-------|----------|--------|-------|
+| A1 | Unvalidated integer coercion in config parsing (DoS panic / silent truncation) | Medium | GAP-040 | [#57](https://gitlab.com/devnw/zig/audit/-/issues/57) |
+| A2 | File-sink audit records dropped silently under backpressure (no counter) | Medium | GAP-041 | [#58](https://gitlab.com/devnw/zig/audit/-/issues/58) |
+| A3 | Control characters (NUL/TAB/BEL/DEL/C0) not escaped in CEF/syslog output | Low-Medium | GAP-042 | [#60](https://gitlab.com/devnw/zig/audit/-/issues/60) |
+| A4 | Path-traversal mitigation incomplete: absolute paths & symlinks bypass `".."` check (residual S9) | Medium | GAP-043 | [#62](https://gitlab.com/devnw/zig/audit/-/issues/62) |
+| A5 | `formatRfc3339` panics on negative timestamp (public API) | Low | GAP-044 | [#63](https://gitlab.com/devnw/zig/audit/-/issues/63) |
+| A6 | Dependency ref/version-hash mismatch in `build.zig.zon` (dns, otel) | Low | GAP-045 | [#64](https://gitlab.com/devnw/zig/audit/-/issues/64) |
+| A7 | Event `ts_unix_ms` never rendered; output timestamp is worker-thread "now" | Low (Info) | GAP-046 | [#66](https://gitlab.com/devnw/zig/audit/-/issues/66) |
+| A8 | `AuditEvent.validate()` does not reject control characters in core fields | Low | GAP-047 | [#67](https://gitlab.com/devnw/zig/audit/-/issues/67) |
+
+Additional 2026-06-11 security/supply-chain findings (`NEW-SEC-*`) are tracked as GAP-050 (PiiMode.hash, High, [#72](https://gitlab.com/devnw/zig/audit/-/issues/72)), GAP-063..069 ([#92](https://gitlab.com/devnw/zig/audit/-/issues/92)-[#98](https://gitlab.com/devnw/zig/audit/-/issues/98)), and the deep-quality-review Criticals QR-001..003 (use-after-return, double-free, literal-free; [#105](https://gitlab.com/devnw/zig/audit/-/issues/105)-[#107](https://gitlab.com/devnw/zig/audit/-/issues/107)). See `docs/GAP_ANALYSIS.md` for the full series.
 
 ---
 
@@ -58,8 +78,8 @@ Risk Score = Impact (1-5) x Likelihood (1-5) x 4
 | 7 | S10 | Medium | 24 | Silent ring buffer overflow drops audit events | `src/syslog.zig` | CWE-770, CWE-779 / A09:2021 | `syslog.zig:128-133` | Emit metric/log on drop; expose overflow count | **Resolved** (GAP-023) |
 | 8 | S7 | Medium | 20 | PRNG seeded from `microTimestamp` | `src/time.zig` | CWE-330, CWE-338 / A02:2021 | `time.zig:138` | Seed from `std.crypto.random` or OS entropy | **Resolved** (GAP-016) |
 | 9 | S8 | Medium | 20 | No `AuditEvent` field validation | `src/events.zig` | CWE-20 / A03:2021 | `events.zig:47-60` | Add `validate()` method with length and format checks | **Resolved** (GAP-017) |
-| 10 | S9 | Medium | 20 | File path from config not sanitized | `src/file_sink.zig` | CWE-22 / A01:2021 | `file_sink.zig:249-254` | Reject path traversal sequences; restrict to allowed directories | Open |
-| 11 | SC-1 | Low | 12 | DNS dependency pinned to commit, not tag | `build.zig.zon` | CWE-829 / A06:2021 | `build.zig.zon:8-9` | Pin to a tagged release | Open (blocked -- cross-repo, GAP-029) |
+| 10 | S9 | Medium | 20 | File path from config not sanitized | `src/file_sink.zig` | CWE-22 / A01:2021 | `file_sink.zig:249-254` | Reject path traversal sequences; restrict to allowed directories | Superseded by GAP-043 (#62, open) |
+| 11 | SC-1 | Low | 12 | DNS dependency pinned to commit, not tag | `build.zig.zon` | CWE-829 / A06:2021 | `build.zig.zon:8-9` | Pin to a tagged release | Superseded by GAP-045 (#64, open); see also GAP-029 (#24) |
 | 12 | S11 | Low | 12 | DNS queries unauthenticated | `src/syslog.zig` | CWE-350 / A07:2021 | `syslog.zig:21-41` | Document DNS spoofing risk; recommend /etc/hosts or DoH | Open |
 | 13 | S12 | Low | 8 | `i128`-to-`i64` cast truncation | `src/syslog.zig` | CWE-681 / A04:2021 | `syslog.zig:249` | Use `std.math.cast` with overflow check | **Moot** (dead code removed via GAP-026/027) |
 | 14 | S13 | Low | 4 | `@panic` in `MockSyslogSender` init | `src/syslog.zig` | CWE-248 / A11:2021 | `syslog.zig:282` | Return error instead of panicking | Open |
@@ -81,6 +101,7 @@ Risk Score = Impact (1-5) x Likelihood (1-5) x 4
 **Evidence:**
 
 `src/cef.zig:152-162`:
+
 ```zig
 fn escapeHeader(s: []const u8) []const u8 {
     return s;
@@ -104,6 +125,7 @@ A working `escapeCefString` implementation exists at line 164-180 but is never c
 **Impact:** Log forgery, audit trail corruption, potential SIEM exploitation. Compliance frameworks (SOC2, PCI DSS 10.2) require tamper-resistant audit logs.
 
 **Fix guidance:**
+
 1. Replace the three no-op functions with calls to `escapeCefString` (which already exists at line 164).
 2. `escapeHeader` must escape `|`, `\`, and replace newlines.
 3. `escapeValue` must escape `=`, `\`, and encode `\n`/`\r`.
@@ -111,6 +133,7 @@ A working `escapeCefString` implementation exists at line 164-180 but is never c
 5. Note: `escapeCefString` currently allocates. The internal callers pass `[]const u8` slices via `{s}` format, so the functions need to either allocate-and-defer or write escaped output directly to the extension writer.
 
 **Acceptance criteria:**
+
 - [ ] `escapeHeader`, `escapeValue`, and `escapeKey` produce correctly escaped output per ArcSight CEF specification.
 - [ ] Unit test: input containing `|`, `=`, `\`, `\n`, `\r` produces escaped output.
 - [ ] Integration test: full CEF line with adversarial input is parseable by a reference CEF parser.
@@ -132,6 +155,7 @@ A working `escapeCefString` implementation exists at line 164-180 but is never c
 **Evidence:**
 
 `src/config.zig:118-124` -- Fields defined:
+
 ```zig
 pub const FiltersConfig = struct {
     default_deny: bool,
@@ -149,11 +173,13 @@ pub const FiltersConfig = struct {
 **Impact:** PCI DSS non-compliance, potential PII/PAN exposure in log storage, false sense of compliance.
 
 **Fix guidance:**
+
 1. In `filterAndRedactMetadata`, check `filters.pci_mode`. When true, scan all string values for PAN patterns (Luhn-valid 13-19 digit sequences) and replace with masked form (`****1234`).
 2. In `filterAndRedactMetadata`, check `filters.pii_mode`. When `.mask`, apply `maskEmail`/`maskPhone` (both already implemented in `filters.zig:191-214`). When `.hash`, apply a one-way hash. When `.off`, skip.
 3. Value-based detection functions (`isPan`, `isEmail`, `isPhone`) already exist in `filters.zig` -- wire them into the filter pipeline.
 
 **Acceptance criteria:**
+
 - [ ] `pci_mode: true` causes all Luhn-valid PAN values to be masked before reaching any sink.
 - [ ] `pii_mode: mask` causes email and phone values to be masked using existing `maskEmail`/`maskPhone`.
 - [ ] `pii_mode: hash` causes PII values to be replaced with a one-way hash.
@@ -176,6 +202,7 @@ pub const FiltersConfig = struct {
 **Evidence:**
 
 `src/filters.zig:245-283`:
+
 ```zig
 pub fn filterAndRedactMetadata(
     allocator: std.mem.Allocator,
@@ -198,11 +225,13 @@ The `shouldFilterField` function at line 285 only checks the key name and string
 **Impact:** Sensitive data (passwords, PII, credentials) embedded in nested metadata structures bypasses all redaction controls.
 
 **Fix guidance:**
+
 1. Make `filterAndRedactMetadata` recursive: when a value is `.object`, recurse into it. When a value is `.array`, iterate elements and recurse into any objects.
 2. Apply `shouldFilterField` to every key at every nesting level.
 3. Apply value-based detection (`detectValueType`) to string values at every nesting level.
 
 **Acceptance criteria:**
+
 - [ ] Nested object keys matching sensitive patterns are redacted.
 - [ ] String values inside arrays are scanned by `detectValueType`.
 - [ ] Recursive depth is bounded to prevent stack overflow on adversarial input.
@@ -225,6 +254,7 @@ The `shouldFilterField` function at line 285 only checks the key name and string
 **Evidence:**
 
 `src/syslog.zig:203-223`:
+
 ```zig
 fn sendUdp(self: *SyslogSender, message: []const u8) !void {
     const socket = try std.posix.socket(std.posix.AF.INET, std.posix.SOCK.DGRAM, 0);
@@ -247,11 +277,13 @@ fn sendTcp(self: *SyslogSender, message: []const u8) !void {
 **Impact:** Cleartext exposure of audit trail data on the network. Compliance risk for frameworks requiring encryption in transit (SOC2 CC6.7, PCI DSS 4.1).
 
 **Fix guidance:**
+
 1. At `SyslogSender.init`, log a prominent warning when `protocol` is `.udp` or `.tcp` stating that transport is unencrypted.
 2. Document in the library README that TLS is not yet available and stunnel or an encrypted tunnel is required for production use.
 3. Consider adding a `require_encryption: bool` config flag that refuses to start when true and protocol is not TLS.
 
 **Acceptance criteria:**
+
 - [ ] `SyslogSender.init` emits a `std.log.warn` when protocol is UDP or TCP.
 - [ ] README documents the plaintext transport limitation and stunnel recommendation.
 - [ ] Optional `require_encryption` flag causes init to return an error for non-TLS protocols.
@@ -273,6 +305,7 @@ fn sendTcp(self: *SyslogSender, message: []const u8) !void {
 **Evidence:**
 
 `src/filters.zig:41-87`:
+
 ```zig
 pub fn isSensitiveKey(allocator: std.mem.Allocator, key: []const u8) ?RedactionToken {
     const lower_key = std.ascii.allocLowerString(allocator, key) catch return null;
@@ -294,12 +327,14 @@ Keys like `"secret_value"`, `"auth_code"`, `"refresh_tok"`, `"bearer"`, `"creden
 **Impact:** Sensitive data under non-standard key names bypasses redaction. The incomplete deny list creates a false sense of security.
 
 **Fix guidance:**
+
 1. Expand the hardcoded list to include common variations: `secret`, `credential`, `bearer`, `auth_code`, `refresh`, `access_key`, `signing`, `pin`, `otp`, `mfa`, `backup_code`.
 2. Support regex or glob patterns in `deny_key_patterns` config to allow deployers to extend the list.
 3. When `default_deny` is true (which it is in the test config), unrecognized keys should already be redacted -- verify this path works correctly for all value types, not just strings.
 4. Consider a `default_deny` + allowlist approach as the primary strategy, with the sensitive-key detection as a defense-in-depth layer.
 
 **Acceptance criteria:**
+
 - [ ] Expanded sensitive key list covers at least: `secret`, `credential`, `bearer`, `auth_code`, `access_key`, `signing`, `pin`, `otp`, `mfa`, `backup`.
 - [ ] `deny_key_patterns` supports glob matching (e.g., `"*secret*"`, `"*key*"`).
 - [ ] Unit tests confirm new patterns are detected and redacted.
@@ -321,6 +356,7 @@ Keys like `"secret_value"`, `"auth_code"`, `"refresh_tok"`, `"bearer"`, `"creden
 **Evidence:**
 
 `src/syslog.zig:225-236`:
+
 ```zig
 fn sendTls(self: *SyslogSender, message: []const u8) !void {
     _ = self;
@@ -331,6 +367,7 @@ fn sendTls(self: *SyslogSender, message: []const u8) !void {
 ```
 
 `src/config.zig:96-102` -- TLS config struct with fields that create the appearance of TLS support:
+
 ```zig
 pub const SyslogTlsConfig = struct {
     pinned_cert_hash: ?[]const u8 = null,
@@ -342,6 +379,7 @@ pub const SyslogTlsConfig = struct {
 ```
 
 `src/syslog.zig:59` -- `tls_pool` struct field allocated but never used:
+
 ```zig
 tls_pool: [MAX_POOL_SIZE]?PooledConnection,
 ```
@@ -351,11 +389,13 @@ tls_pool: [MAX_POOL_SIZE]?PooledConnection,
 **Impact:** False assurance of encrypted transport. Silent data loss of all audit events when TLS protocol is selected.
 
 **Fix guidance:**
+
 1. At `SyslogSender.init`, check if `protocol == .tls` and return `error.TlsNotImplemented` immediately, preventing silent startup.
 2. Remove or clearly mark the `SyslogTlsConfig` fields as unimplemented to avoid misleading operators.
 3. Remove the dead `tls_pool` field and `verifyCertificatePin` function to reduce attack surface.
 
 **Acceptance criteria:**
+
 - [ ] `SyslogSender.init` returns an error when `protocol = .tls`.
 - [ ] Documentation explicitly states TLS is not yet supported.
 - [ ] Dead TLS-related code is removed or gated behind a compile-time feature flag.
@@ -377,6 +417,7 @@ tls_pool: [MAX_POOL_SIZE]?PooledConnection,
 **Evidence:**
 
 `src/syslog.zig:128-133`:
+
 ```zig
 if (!self.queue.push(syslog_line)) {
     if (self.queue.pop()) |old_msg| {
@@ -391,12 +432,14 @@ if (!self.queue.push(syslog_line)) {
 **Impact:** Audit trail gaps during high-traffic periods. Attackers can deliberately cause event loss to cover their tracks.
 
 **Fix guidance:**
+
 1. Add an atomic counter for dropped messages.
 2. Log a warning on first drop and periodically (e.g., every 1000 drops).
 3. Expose `dropped_count` via a public method so applications can monitor it.
 4. Consider a configurable backpressure policy (block, drop-newest, drop-oldest).
 
 **Acceptance criteria:**
+
 - [ ] Dropped message counter is incremented on every overflow.
 - [ ] A warning is logged on the first drop and periodically thereafter.
 - [ ] `SyslogSender` exposes a method to query the drop count.
@@ -418,6 +461,7 @@ if (!self.queue.push(syslog_line)) {
 **Evidence:**
 
 `src/time.zig:136-139`:
+
 ```zig
 pub fn init() SystemIdGen {
     return SystemIdGen{
@@ -431,10 +475,12 @@ pub fn init() SystemIdGen {
 **Impact:** Predictable trace/span/request IDs. While these are not security tokens, predictability undermines trace integrity and could enable trace injection in distributed tracing systems.
 
 **Fix guidance:**
+
 1. Replace `std.time.microTimestamp()` with `std.crypto.random.int(u64)` or `std.posix.getrandom()` for the PRNG seed.
 2. Alternatively, use `std.crypto.random` directly for ID generation instead of a seeded PRNG.
 
 **Acceptance criteria:**
+
 - [ ] `SystemIdGen.init()` seeds from OS entropy, not from a timestamp.
 - [ ] Unit test: two `SystemIdGen` instances created in the same microsecond produce different sequences.
 
@@ -455,6 +501,7 @@ pub fn init() SystemIdGen {
 **Evidence:**
 
 `src/events.zig:47-60`:
+
 ```zig
 pub const AuditEvent = struct {
     category: []const u8,
@@ -479,6 +526,7 @@ pub const AuditEvent = struct {
 **Impact:** DoS via resource exhaustion, malformed log entries, potential buffer issues in downstream SIEM systems.
 
 **Fix guidance:**
+
 1. Add a `validate() !void` method to `AuditEvent` that enforces:
    - `category` and `action` are non-empty and under 256 bytes.
    - `actor_id` is non-empty and under 256 bytes.
@@ -488,6 +536,7 @@ pub const AuditEvent = struct {
 2. Call `validate()` at the top of `AuditLogger.audit()`.
 
 **Acceptance criteria:**
+
 - [ ] `AuditEvent` has a `validate()` method that checks all field constraints.
 - [ ] `AuditLogger.audit()` calls `validate()` before processing.
 - [ ] Unit tests confirm invalid events are rejected with descriptive errors.
@@ -497,6 +546,8 @@ pub const AuditEvent = struct {
 ---
 
 ### S9: File Path From Config Not Sanitized
+
+> **Status update (2026-06-11):** Superseded by **GAP-043** ([#62](https://gitlab.com/devnw/zig/audit/-/issues/62), open). A partial mitigation (a `".."` substring check in `FileSink.openCurrentFile`) was added, but the 2026-06-11 appsec review found it incomplete: absolute paths (e.g. `/etc/cron.d/evil`) and symlinked directory components still escape any intended base, and rotation paths inherit the same unvalidated base. Tracking continues under GAP-043.
 
 **Severity:** Medium | **Risk Score:** 20 (Impact 2 x Likelihood 2 x 4 = 16, adjusted to 20 per provided scoring) | **SLA:** 90 days
 **Confidence:** `confirmed`
@@ -509,6 +560,7 @@ pub const AuditEvent = struct {
 **Evidence:**
 
 `src/file_sink.zig:249-254`:
+
 ```zig
 fn openCurrentFile(self: *FileSink) !void {
     if (std.fs.path.dirname(self.config.path)) |dir_path| {
@@ -522,11 +574,13 @@ Note that `makePath` errors are silently ignored (`catch {}`), which could mask 
 **Impact:** Arbitrary file creation/overwrite within the filesystem permissions of the running process. Potential for privilege escalation if the process runs with elevated permissions.
 
 **Fix guidance:**
+
 1. Resolve the config path to an absolute path and verify it does not escape an allowed base directory.
 2. Reject paths containing `..` components.
 3. Do not silently ignore `makePath` errors -- propagate them or log a warning.
 
 **Acceptance criteria:**
+
 - [ ] Paths containing `..` are rejected at config load or `FileSink.init` time.
 - [ ] `makePath` errors are logged, not silently swallowed.
 - [ ] Unit test: config with `"path": "../../tmp/evil.log"` is rejected.
@@ -536,6 +590,8 @@ Note that `makePath` errors are silently ignored (`catch {}`), which could mask 
 ---
 
 ### SC-1: DNS Dependency Pinned to Commit Hash, Not Tagged Release
+
+> **Status update (2026-06-11):** Superseded by **GAP-045** ([#64](https://gitlab.com/devnw/zig/audit/-/issues/64), open). The dependency is now pinned by tag, but the 2026-06-11 appsec review found a ref/version-hash drift: the `dns` URL requests `?ref=v0.1.9` while the recorded content `.hash` self-labels `dns-0.1.8-...` (otel shows the same class of drift). Auditability tracking continues under GAP-045; the original cross-repo tagging item remains GAP-029 ([#24](https://gitlab.com/devnw/zig/audit/-/issues/24)).
 
 **Severity:** Low | **Risk Score:** 12 (Impact 2 x Likelihood 1 x 4 = 8, adjusted to 12 per provided scoring) | **SLA:** 180 days
 **Confidence:** `confirmed`
@@ -548,6 +604,7 @@ Note that `makePath` errors are silently ignored (`catch {}`), which could mask 
 **Evidence:**
 
 `build.zig.zon:7-10`:
+
 ```zig
 .dns = .{
     .url = "git+https://gitlab.com/devnw/zig/dns.git#976fedf07befad3724fa66092677b9e5242a58fc",
@@ -558,11 +615,13 @@ Note that `makePath` errors are silently ignored (`catch {}`), which could mask 
 **Impact:** Reduced supply chain auditability. No clear version identifier for vulnerability tracking.
 
 **Fix guidance:**
+
 1. Tag the DNS library with a semver release (e.g., `v0.1.0`).
 2. Update `build.zig.zon` to reference the tag instead of the commit hash.
 3. The content hash provides integrity verification, so this is primarily an auditability concern.
 
 **Acceptance criteria:**
+
 - [ ] DNS dependency references a tagged release.
 - [ ] Content hash is still present for integrity verification.
 
@@ -581,6 +640,7 @@ Note that `makePath` errors are silently ignored (`catch {}`), which could mask 
 **Evidence:**
 
 `src/syslog.zig:21-41`:
+
 ```zig
 fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u16) !std.net.Address {
     if (std.net.Address.parseIp4(host, port)) |addr| {
@@ -601,11 +661,13 @@ fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u1
 **Impact:** Audit events could be redirected to an attacker-controlled server via DNS spoofing. Limited by the requirement for a network-level MitM position.
 
 **Fix guidance:**
+
 1. Document the DNS spoofing risk in the library README.
 2. Recommend using IP addresses directly in production config to bypass DNS.
 3. Recommend `/etc/hosts` entries or DNS-over-HTTPS for hostname resolution.
 
 **Acceptance criteria:**
+
 - [ ] Documentation warns about DNS spoofing risk for hostname-based syslog config.
 - [ ] README recommends using IP addresses for production syslog endpoints.
 
@@ -624,6 +686,7 @@ fn resolveHostToAddress(allocator: std.mem.Allocator, host: []const u8, port: u1
 **Evidence:**
 
 `src/syslog.zig:249`:
+
 ```zig
 conn.last_used = @as(i64, @intCast(self.clock.nowMs()));
 ```
@@ -633,10 +696,12 @@ The `Clock.nowMs` returns `i128` (see `time.zig:11`), and `PooledConnection.last
 **Impact:** Potential runtime panic if a `Clock` implementation returns values outside `i64` range. Low probability with real system clocks.
 
 **Fix guidance:**
+
 1. Use `std.math.cast(i64, value)` which returns `null` on overflow instead of panicking.
 2. Or change `PooledConnection.last_used` to `i128` to match the `Clock` return type.
 
 **Acceptance criteria:**
+
 - [ ] The cast handles overflow gracefully without panicking.
 
 ---
@@ -654,6 +719,7 @@ The `Clock.nowMs` returns `i128` (see `time.zig:11`), and `PooledConnection.last
 **Evidence:**
 
 `src/syslog.zig:282`:
+
 ```zig
 .captured_messages = std.ArrayList([]const u8).initCapacity(allocator, 16) catch @panic("MockSyslogSender init failed"),
 ```
@@ -661,9 +727,11 @@ The `Clock.nowMs` returns `i128` (see `time.zig:11`), and `PooledConnection.last
 **Impact:** Test crash with no recovery path. Minimal production impact since `MockSyslogSender` is test infrastructure.
 
 **Fix guidance:**
+
 1. Change `MockSyslogSender.init` to return `!MockSyslogSender` (error union) and propagate the error instead of panicking.
 
 **Acceptance criteria:**
+
 - [ ] `MockSyslogSender.init` returns an error union instead of panicking.
 
 ---
@@ -671,37 +739,46 @@ The `Clock.nowMs` returns `i128` (see `time.zig:11`), and `PooledConnection.last
 ## Findings By Area
 
 ### Authentication and Authorization
+
 - No findings. The library does not implement auth; it logs auth events created by the calling application.
 
 ### Web/API Surface
+
 - Not applicable. This is a library, not a service.
 
 ### Input Validation
+
 - **S1** (Critical): CEF escape no-ops allow log injection.
 - **S5** (High): Incomplete sensitive key detection.
 - **S8** (Medium): No `AuditEvent` field validation.
 
 ### Data Protection and Redaction
+
 - **S2** (High): `pii_mode`/`pci_mode` flags ignored.
 - **S3** (High): Redaction does not recurse into nested structures.
 
 ### Transport Security
+
 - **S4** (High): Plaintext syslog transport.
 - **S6** (High): TLS config accepted but unimplemented.
 - **S11** (Low): Unauthenticated DNS resolution.
 
 ### Cryptography and Randomness
+
 - **S7** (Medium): Predictable PRNG seed from timestamp.
 
 ### Filesystem and Configuration
+
 - **S9** (Medium): Unsanitized file path from config.
 
 ### Reliability and Monitoring
+
 - **S10** (Medium): Silent ring buffer overflow.
 - **S12** (Low): Integer cast truncation risk.
 - **S13** (Low): `@panic` in test mock.
 
 ### Supply Chain
+
 - **SC-1** (Low): DNS dependency pinned to commit, not tag.
 
 ---
