@@ -359,8 +359,14 @@ pub fn formatRfc5424(allocator: std.mem.Allocator, event: *const events.AuditEve
     const severity = event.severity.toSyslogSeverity();
     const pri = facility * 8 + severity;
 
+    // GAP-046/A7: the event's own timestamp is authoritative (audit()
+    // stamps ts_unix_ms before fan-out); the clock fallback only covers
+    // direct calls with unstamped (ts == 0) events.
     var ts_buf: [64]u8 = undefined;
-    const timestamp = clock.nowRfc3339(&ts_buf);
+    const timestamp = if (event.ts_unix_ms != 0)
+        time.formatRfc3339(event.ts_unix_ms, &ts_buf)
+    else
+        clock.nowRfc3339(&ts_buf);
 
     return std.fmt.allocPrint(allocator, "<{d}>1 {s} {s} {s} {d} AUDIT - {s}", .{
         pri,
@@ -420,6 +426,53 @@ pub const MockSyslogSender = struct {
 };
 
 const BoundedChannel = @import("channel.zig").BoundedChannel;
+
+test "GAP-046/A7: formatRfc5424 renders the event's own timestamp, not format-time now" {
+    const allocator = std.testing.allocator;
+
+    // Clock frozen at TEST_TIMESTAMP_MS; the event is stamped 5 seconds
+    // later. The RFC 5424 header timestamp must carry the EVENT's timestamp.
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS + 5000,
+        .severity = .INFO,
+        .actor_id = "jane.doe",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "authsvc",
+        .host = "app-host",
+        .pid = 1234,
+    };
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = false,
+        .protocol = .udp,
+        .host = "{{TEST_HOST}}",
+        .port = 514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local4,
+        },
+    };
+
+    const line = try formatRfc5424(allocator, &event, "CEF:0|V|P|1|sig|name|5|", service_config, syslog_config, clock);
+    defer allocator.free(line);
+
+    try std.testing.expect(std.mem.indexOf(u8, line, "2025-01-01T00:00:05.000Z") != null);
+    try std.testing.expect(std.mem.indexOf(u8, line, "2025-01-01T00:00:00.000Z") == null);
+}
 
 test "SyslogSender.init rejects TLS protocol" {
     const allocator = std.testing.allocator;

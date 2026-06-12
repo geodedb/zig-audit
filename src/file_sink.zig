@@ -198,8 +198,14 @@ pub const FileSink = struct {
             json_obj.deinit(self.allocator);
         }
 
+        // GAP-046/A7: the event's own timestamp is authoritative — audit()
+        // stamps ts_unix_ms before fan-out. The clock fallback only covers
+        // direct public-formatter calls with unstamped (ts == 0) events.
         var ts_buf: [64]u8 = undefined;
-        const timestamp = self.clock.nowRfc3339(&ts_buf);
+        const timestamp = if (event.ts_unix_ms != 0)
+            time.formatRfc3339(event.ts_unix_ms, &ts_buf)
+        else
+            self.clock.nowRfc3339(&ts_buf);
         try self.putField(&json_obj, "ts", timestamp);
 
         try self.putField(&json_obj, "category", event.category);
@@ -510,6 +516,81 @@ test "QR-009: rotation size accounting includes the trailing newline" {
     // The pre-rotation file (6 bytes) must have been moved to the backup.
     const backup_stat = try cwd.statFile(io, test_dir ++ "/audit.log.1", .{});
     try testing.expectEqual(@as(u64, 6), backup_stat.size);
+}
+
+test "GAP-046/A7: formatJsonLine renders the event's own timestamp, not format-time now" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Clock frozen at TEST_TIMESTAMP_MS; the event is stamped 5 seconds
+    // later. The rendered "ts" must be the EVENT's timestamp.
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+
+    var sink = try FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap046/audit.log",
+        .max_bytes = 1024 * 1024,
+        .backup_count = 0,
+    }, fixed_clock.clock());
+    defer sink.ch.deinit();
+
+    const event = events.AuditEvent{
+        .category = "test",
+        .action = "event_ts",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS + 5000,
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    const line = try sink.formatJsonLine(&event, null);
+    defer allocator.free(line);
+
+    try testing.expect(std.mem.indexOf(u8, line, "\"ts\":\"2025-01-01T00:00:05.000Z\"") != null);
+    try testing.expect(std.mem.indexOf(u8, line, "2025-01-01T00:00:00.000Z") == null);
+}
+
+test "GAP-046/A7: formatJsonLine falls back to the clock for unstamped events" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+
+    var sink = try FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap046-fb/audit.log",
+        .max_bytes = 1024 * 1024,
+        .backup_count = 0,
+    }, fixed_clock.clock());
+    defer sink.ch.deinit();
+
+    const event = events.AuditEvent{
+        .category = "test",
+        .action = "event_ts",
+        .outcome = .success,
+        .ts_unix_ms = 0, // unstamped: direct formatter call without audit()
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    const line = try sink.formatJsonLine(&event, null);
+    defer allocator.free(line);
+
+    try testing.expect(std.mem.indexOf(u8, line, "\"ts\":\"2025-01-01T00:00:00.000Z\"") != null);
 }
 
 test "FileSink sync_mode per_event is default" {

@@ -26,9 +26,14 @@ pub fn formatCef(
     var extension = try std.ArrayList(u8).initCapacity(allocator, 256);
     defer extension.deinit(allocator);
 
-    // Timestamp
+    // Timestamp — GAP-046/A7: the event's own timestamp is authoritative
+    // (audit() stamps ts_unix_ms before fan-out); the clock fallback only
+    // covers direct calls with unstamped (ts == 0) events.
     var ts_buf: [64]u8 = undefined;
-    const ts_str = clock.nowRfc3339(&ts_buf);
+    const ts_str = if (event.ts_unix_ms != 0)
+        time.formatRfc3339(event.ts_unix_ms, &ts_buf)
+    else
+        clock.nowRfc3339(&ts_buf);
     try extension.print(allocator, "rt={s}", .{ts_str});
 
     // Core fields
@@ -289,6 +294,46 @@ test "CEF formatting" {
     try testing.expect(std.mem.indexOf(u8, cef_msg, "act=login") != null);
     try testing.expect(std.mem.indexOf(u8, cef_msg, "outcome=success") != null);
     try testing.expect(std.mem.indexOf(u8, cef_msg, "suser=jane.doe") != null);
+}
+
+test "GAP-046/A7: formatCef renders the event's own timestamp, not format-time now" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Clock frozen at TEST_TIMESTAMP_MS; the event is stamped 5 seconds
+    // later. The CEF rt= field must carry the EVENT's timestamp.
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const identity = config.CefIdentityConfig{
+        .vendor = "DEVNW",
+        .product = "AUDIT",
+        .version = "0.1.0",
+    };
+
+    const event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS + 5000,
+        .severity = .INFO,
+        .actor_id = "jane.doe",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    const cef_msg = try formatCef(allocator, &event, &identity, clock);
+    defer allocator.free(cef_msg);
+
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "rt=2025-01-01T00:00:05.000Z") != null);
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "2025-01-01T00:00:00.000Z") == null);
 }
 
 test "escapeCefString: header escapes backslash and pipe" {
