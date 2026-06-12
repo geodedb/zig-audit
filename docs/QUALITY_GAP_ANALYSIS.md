@@ -1,6 +1,6 @@
 # Quality Gap Analysis
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 Repository: `gitlab.com/devnw/zig/audit`
 Branch: `main`
@@ -14,19 +14,17 @@ Source: Deep quality review of all source modules and test files; refreshed agai
 |----------|------|---------|----------|-------|
 | Critical | 0 | 0 | 2 (Q1, Q2) | 2 |
 | High     | 0 | 0 | 5 (Q3, Q4, Q5, Q6, Q7) | 5 |
-| Medium   | 1 (Q11) | 0 | 7 (Q8, Q9, Q10, Q12, Q13, Q14, Q15) | 8 |
-| Low      | 1 (Q19) | 1 (Q16) | 4 (Q17, Q18, Q20, Q21) | 6 |
-| **Total** | **2** | **1** | **18** | **21** |
+| Medium   | 0 | 0 | 8 (Q8, Q9, Q10, Q11, Q12, Q13, Q14, Q15) | 8 |
+| Low      | 0 | 1 (Q16) | 5 (Q17, Q18, Q19, Q20, Q21) | 6 |
+| **Total** | **0** | **1** | **20** | **21** |
 
-**All Critical and High findings are resolved. 18 of 21 findings resolved; 1 partial (Q16); 2 open (Q11, Q19).**
+**All Critical and High findings are resolved. 20 of 21 findings resolved; 1 partial (Q16).**
 
-The 2026-06-11 audit re-verified each finding against current code. Newly confirmed resolutions: Q6, Q8, Q9, Q13, Q14, Q15, Q17, Q20. **Correction:** Q19 was previously marked resolved but the `requestId` vtable is still present in `src/time.zig` — it is reopened and tracked as **GAP-073**.
+*2026-06-12 update:* Q11 (GAP-072) and Q19 (GAP-073) resolved by removal of the `requestId` vtable method from IdGen entirely (`time.zig:124-127`, commit 365aeb9). Q16 remains partial: `RingBuffer` extracted, but `src/syslog.zig` is now 775 LOC (was 652) due to persistent-socket and batch-drain additions -- further decomposition still pending. QR-001..003 Criticals (memory safety) closed.
 
-### Remaining Open / Partial
+### Remaining Partial
 
-1. **Q11 (Medium, open)**: `requestIdImpl` returns "" on OOM instead of an error → **GAP-072**.
-2. **Q19 (Low, open)**: `IdGen.requestId` vtable method still present and dispatched (`src/time.zig:115,127-128,172,212`); not removed as previously documented → **GAP-073**.
-3. **Q16 (Low, partial)**: `RingBuffer` was extracted to its own module, but `src/syslog.zig` is still 652 LOC — further decomposition pending.
+1. **Q16 (Low, partial)**: `src/syslog.zig` now 775 LOC (grown from 652 due to remediation additions). RingBuffer was extracted; further decomposition of SyslogSender/MockSyslogSender deferred.
 
 ---
 
@@ -43,16 +41,16 @@ The 2026-06-11 audit re-verified each finding against current code. Newly confir
 | 7 | Q7 | High | 60 | tests | No test coverage for config parsing error paths | `src/config.zig`, `tests/` | Zero test files reference `loadConfig`, `parseConfig`, `ConfigNotFound`, `InvalidJson`, or `MissingVersion`; 24 panic-prone unwrap sites are untested | GAP-018 | 8 inline tests added covering all error paths | @benjiv | M | **resolved** |
 | 8 | Q8 | Medium | 48 | maintainability | nowRfc3339Impl duplicated between SystemClock and FixedClock | `src/time.zig` | Shared `formatRfc3339` helper now used by both clocks: `src/time.zig:40` | -- | Single shared `formatRfc3339` helper; no duplication | @benjiv | S | **resolved** |
 | 9 | Q9 | Medium | 48 | maintainability | formatRfc5424 logic duplicated between SyslogSender and MockSyslogSender | `src/syslog.zig` | Standalone shared `formatRfc5424` at `src/syslog.zig:347`, called from both SyslogSender and MockSyslogSender | -- | Single shared `formatRfc5424` function | @benjiv | S | **resolved** |
-| 10 | Q11 | Medium | 48 | api-contract | requestIdImpl returns "" on OOM instead of error | `src/time.zig` | Line 163: `catch ""` on `allocPrint`; line 201: `catch ""` on `allocator.dupe`; callers cannot distinguish OOM from a legitimate empty ID | -- | Change `requestId` vtable signature to return `![]const u8`; propagate errors | TBD | S | triage |
+| 10 | Q11 | Medium | 48 | api-contract | requestIdImpl returns "" on OOM instead of error | `src/time.zig` | Line 163: `catch ""` on `allocPrint`; line 201: `catch ""` on `allocator.dupe`; callers cannot distinguish OOM from a legitimate empty ID | -- | requestId vtable method removed entirely from IdGen | TBD | S | **resolved** (GAP-072/GAP-073 -- vtable method removed, commit 365aeb9) |
 | 11 | Q10 | Medium | 36 | readability | escapeCefString has redundant = handling in both branches | `src/cef.zig` | Line 172: `'=' => if (is_header) try result.appendSlice(allocator, "\\=") else try result.appendSlice(allocator, "\\=")` -- both branches do the same thing | GAP-006 | Fixed during CEF escape rewrite: = only escaped in extensions per spec | @benjiv | S | **resolved** |
 | 12 | Q13 | Medium | 36 | perf | truncateEvent result allocated and immediately freed | `src/logger.zig` | `truncateEvent` removed; truncation handled inline at `src/logger.zig:165-175` with no throwaway allocation | -- | Dead `truncateEvent` call removed | @benjiv | S | **resolved** |
 | 13 | Q12 | Medium | 24 | cleanup | Dead AuditEvent.init() and deinit() methods | `src/events.zig` | Lines 62-85: `init` takes an allocator it ignores; `deinit` is never called (callers use `freeCloned`); zero references in codebase | GAP-026 | Dead AuditEvent.init removed | @benjiv | S | **resolved** |
 | 14 | Q14 | Medium | 24 | docs | 8 of 9 source files lack module-level doc comments | `src/*.zig` | All source modules now carry `//!` headers (verified: cef, config, events, file_sink, filters, logger, syslog, time, channel, sync, json_util, ring_buffer, observability, root, ...) | -- | `//!` module docs added to every source file | @benjiv | M | **resolved** |
 | 15 | Q15 | Medium | 20 | readability | Missing explanatory comments on non-obvious filter logic | `src/filters.zig` | Explanatory comment now present at `src/filters.zig:466` explaining the negated `isPemPrivateKey` / `-----BEGIN` guard | -- | Comment added explaining the forward-looking PEM guard | @benjiv | S | **resolved** |
-| 16 | Q16 | Low | 16 | architecture | syslog.zig has multiple types in one file | `src/syslog.zig` | `RingBuffer` extracted to `src/ring_buffer.zig`; however `src/syslog.zig` is still 652 LOC -- further decomposition pending | -- | RingBuffer extracted; remaining decomposition of SyslogSender/MockSyslogSender open | @benjiv | S | **partial** |
+| 16 | Q16 | Low | 16 | architecture | syslog.zig has multiple types in one file | `src/syslog.zig` | `RingBuffer` extracted to `src/ring_buffer.zig`; however `src/syslog.zig` is now 775 LOC (grown from 652 due to remediation additions) -- further decomposition pending | -- | RingBuffer extracted; remaining decomposition of SyslogSender/MockSyslogSender deferred | @benjiv | S | **partial** |
 | 17 | Q17 | Low | 16 | readability | formatJsonLine repetitive field insertion | `src/file_sink.zig` | `putField` helper extracted (`src/file_sink.zig:150`); `formatJsonLine` now calls `self.putField(...)` instead of repeating the dupe+put pattern | -- | `putField` helper added; repetition removed | @benjiv | S | **resolved** |
 | 18 | Q18 | Low | 12 | cleanup | Dead TLS pool management code | `src/syslog.zig` | Lines 238-271: `releasePooledConnection` and `verifyCertificatePin` are never called; TLS transport returns `error.TlsNotImplemented` | GAP-026/027 | Dead functions and TLS pool fields removed | @benjiv | S | **resolved** |
-| 19 | Q19 | Low | 12 | cleanup | Dead IdGen.requestId vtable method (NOT resolved) | `src/time.zig` | **Still present:** `requestId` vtable field at `src/time.zig:115`, dispatch at `:127-128`, impls at `:172` and `:212`. Previously marked resolved in error -- the method was not removed | GAP-073 | Reopened. Remove `requestId` from the `IdGen` vtable and impls, or document a real consumer | @benjiv | S | **open** |
+| 19 | Q19 | Low | 12 | cleanup | Dead IdGen.requestId vtable method | `src/time.zig` | requestId vtable field, dispatch, and impls removed. `time.zig:124-127` IdGen.VTable now has only traceId/spanId. | GAP-073 | Removed requestId from the IdGen vtable and impls (commit 365aeb9) | @benjiv | S | **resolved** |
 | 20 | Q20 | Low | 8 | cleanup | ErrorLogJson struct used only for default values | `src/file_sink.zig` | `ErrorLogJson` removed -- grep finds zero references in `src/`; error-log defaults inlined | -- | Struct removed; defaults inlined | @benjiv | S | **resolved** |
 | 21 | Q21 | Low | 8 | docs | Placeholder example not wired into build | `examples/basic.zig` | 24-line file prints "Example completed successfully!" with commented-out audit usage; not referenced in `build.zig` | GAP-028 | Working example wired into build.zig | @benjiv | M | **resolved** |
 
@@ -102,7 +100,7 @@ The 2026-06-11 audit re-verified each finding against current code. Newly confir
 |----|----------|---------|--------|
 | Q12 | Medium | AuditEvent.init() and deinit() never called | resolved |
 | Q18 | Low | TLS pool management code unreachable (TLS not implemented) | resolved |
-| Q19 | Low | IdGen.requestId vtable method never called by any consumer (still present) | **open → GAP-073** |
+| Q19 | Low | IdGen.requestId vtable method never called by any consumer | **resolved → GAP-073 closed** |
 | Q20 | Low | ErrorLogJson struct only used for inline default values | resolved |
 
 ### Readability / Documentation (Q10, Q14, Q15, Q17)
@@ -118,36 +116,32 @@ The 2026-06-11 audit re-verified each finding against current code. Newly confir
 
 | ID | Severity | Summary | Status |
 |----|----------|---------|--------|
-| Q16 | Low | syslog.zig still 652 LOC (RingBuffer extracted) | **partial** |
+| Q16 | Low | syslog.zig still 775 LOC (grew; RingBuffer extracted; decomposition deferred) | **partial** |
 | Q21 | Low | Placeholder example not wired into build | resolved |
 
 ---
 
 ## Roadmap (remaining open / partial only)
 
-All other Q-findings are resolved (see status column above).
+All Q-findings are resolved except Q16 (partial). GAP-072 (Q11) and GAP-073 (Q19) both closed 2026-06-12 via requestId vtable removal.
 
-### Quick Wins (< 1 day)
-
-| ID | Severity | Fix | Tracking |
-|----|----------|-----|----------|
-| Q19 | Low | Remove the still-present `requestId` from the `IdGen` vtable and impls (`src/time.zig:115,127-128,172,212`) or document a real consumer | GAP-073 |
-
-### Medium (1-5 days)
+### Remaining (1-5 days)
 
 | ID | Severity | Fix | Tracking |
 |----|----------|-----|----------|
-| Q11 | Medium | Change `requestId` return type to `![]const u8`; propagate OOM instead of `catch ""` | GAP-072 |
-| Q16 | Low (partial) | Further decompose `src/syslog.zig` (still 652 LOC) beyond the already-extracted `RingBuffer` | -- |
+| Q16 | Low (partial) | Further decompose `src/syslog.zig` (775 LOC) beyond the already-extracted `RingBuffer` | deferred |
 
 ---
 
 ## 2026-06-11 Audit Pointer
 
-The 2026-06-11 full audit added new quality findings tracked as **GAP-058..062, GAP-072..074** and **QR-001..018** — see `docs/GAP_ANALYSIS.md` and the issue tracker for their full text. They are not duplicated here. Of direct relevance to this document:
+The 2026-06-11 full audit added quality findings tracked as **GAP-058..062, GAP-072..074** and **QR-001..018**. As of 2026-06-12:
 
-- **GAP-072** carries forward Q11 (requestId OOM swallowing).
-- **GAP-073** carries forward the reopened Q19 (requestId vtable still present).
+- **GAP-072** (Q11 requestId OOM swallowing) -- **CLOSED** -- vtable method removed entirely (commit 365aeb9).
+- **GAP-073** (Q19 requestId vtable still present) -- **CLOSED** -- vtable method, dispatch, and impls removed (commit 365aeb9).
+- **GAP-058..062** (decomposition/cleanup findings) -- **CLOSED** (commit 716e34b).
+- **QR-001..003** (Critical memory-safety) -- **CLOSED** (commits 5af9f06, a4b0ccb, 7aaac81).
+- **QR-004..016** -- **CLOSED** per 2026-06-12 cycle. See `docs/APPSEC_REVIEW_2026-06-12_iter2.md`.
 
 ---
 
@@ -183,14 +177,14 @@ Several quality findings overlap with gaps already tracked in `docs/GAP_ANALYSIS
 | Q8 | confirmed (resolved) | time.zig:40 shared `formatRfc3339` helper used by both clocks |
 | Q9 | confirmed (resolved) | syslog.zig:347 standalone shared `formatRfc5424` called from both senders |
 | Q10 | confirmed (resolved) | redundant `=` branch removed during CEF escape rewrite |
-| Q11 | confirmed (open) | time.zig still `catch ""` on OOM; tracked GAP-072 |
+| Q11 | confirmed (resolved) | requestId vtable method removed entirely; GAP-072 closed 2026-06-12 |
 | Q12 | confirmed (resolved) | grep for `AuditEvent.init` returns zero matches |
 | Q13 | confirmed (resolved) | `truncateEvent` removed; inline truncation at logger.zig:165-175 |
 | Q14 | confirmed (resolved) | every `src/*.zig` carries a `//!` module header (verified via grep) |
 | Q15 | confirmed (resolved) | filters.zig:466 comment explains the PEM guard |
-| Q16 | confirmed (partial) | `ring_buffer.zig` extracted, but `wc -l src/syslog.zig` = 652 |
+| Q16 | confirmed (partial) | `ring_buffer.zig` extracted, but `wc -l src/syslog.zig` = 775 (grown due to remediation additions) |
 | Q17 | confirmed (resolved) | `putField` helper at file_sink.zig:150 removes the repeated dupe+put pattern |
 | Q18 | confirmed (resolved) | `releasePooledConnection`/`verifyCertificatePin` removed |
-| Q19 | confirmed (NOT resolved) | `requestId` still on the `IdGen` vtable: time.zig:115 (field), :127-128 (dispatch), :172/:212 (impls); GAP-073 |
+| Q19 | confirmed (resolved) | `requestId` vtable field, dispatch, and impls removed: `time.zig:124-127` now has only traceId/spanId; GAP-073 closed 2026-06-12 |
 | Q20 | confirmed (resolved) | `ErrorLogJson` removed; grep returns zero references in `src/` |
 | Q21 | confirmed (resolved) | working example wired into build.zig |

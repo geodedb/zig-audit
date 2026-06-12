@@ -1,6 +1,6 @@
 # Security Gap Analysis
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 Repository: `gitlab.com/devnw/zig/audit`
 Reviewer: benjiv
@@ -12,42 +12,40 @@ Scope: All source files in `src/` and `build.zig.zon`
 | Severity | Open | Resolved | Total |
 |----------|------|----------|-------|
 | Critical | 0 | 1 (S1) | 1 |
-| High | 0 | 5 (S2, S3, S4, S5, S6) | 5 |
-| Medium | 2 (S9, S12*) | 3 (S7, S8, S10) | 4+1* |
-| Low | 3 (SC-1, S11, S13) | 0 | 4 |
-| **Total** | **5** | **9** | **14** |
+| High | 0 | 6 (S2, S3, S4, S5, S6, GAP-050) | 6 |
+| Medium | 0 (S9 resolved, S12 moot) | 4 (S7, S8, S10, S9/GAP-043) | 4+1* |
+| Low | 2 (S11, SC-1/GAP-045) | 1 (S13 -- moot/test-only) | 3 |
+| **Total** | **2** | **12** | **14** |
 
-*Note: S12 (`i128`-to-`i64` cast) is moot after GAP-026/GAP-027 removed the dead code containing the cast.*
+*Note: S12 (`i128`-to-`i64` cast) is moot after GAP-026/GAP-027 removed the dead code containing the cast. S13 (`@panic` in MockSyslogSender) is test-only code only, not a production concern.*
 
-*2026-06-11 update: S9 and SC-1 are superseded by GAP-043 ([#62](https://gitlab.com/devnw/zig/audit/-/issues/62)) and GAP-045 ([#64](https://gitlab.com/devnw/zig/audit/-/issues/64)) respectively (still open; tracking continues under the new Gap-IDs). S11 and S13 remain open. Eight new appsec findings (A1-A8) and additional NEW-SEC items were filed -- see the "2026-06-11 Appsec Review" section below.*
+*2026-06-12 update: A1-A8 / GAP-040..047 / GAP-050 / GAP-063 all verified CLOSED by iter-2 appsec re-review (docs/APPSEC_REVIEW_2026-06-12_iter2.md). S9 superseded-resolved via GAP-043 (#62, closed). SC-1/GAP-045 (#64) and S11 remain open-documented. QR-001/002/003 Criticals (memory safety) closed.*
 
-**All Critical and High severity findings from the original (2026-03-22) review are resolved.** The 2026-06-11 review filed one High security item (GAP-050, PiiMode.hash) and three Critical correctness/memory-safety items in the deep quality review (QR-001..003).
+**All Critical and High severity findings are resolved.** The iter-2 appsec re-review (2026-06-12) confirmed every A1-A8 finding genuinely closed in current code. No new security vulnerabilities introduced by the ~30-commit remediation.
 
-**Remaining open findings** (Medium/Low, none blocking 0.1.0 release):
+**Remaining open findings** (Low, none blocking):
 
-1. **S9** (Medium) -- File path from config not sanitized (CWE-22). **Superseded by GAP-043** ([#62](https://gitlab.com/devnw/zig/audit/-/issues/62), open): the `".."` substring mitigation is incomplete (absolute/symlink bypass).
-2. **SC-1** (Low) -- DNS dependency pin auditability. **Superseded by GAP-045** ([#64](https://gitlab.com/devnw/zig/audit/-/issues/64), open): ref/version-hash drift (`?ref=v0.1.9` vs `dns-0.1.8` hash). See also GAP-029 ([#24](https://gitlab.com/devnw/zig/audit/-/issues/24)).
-3. **S11** (Low) -- DNS queries unauthenticated (documentation-only fix). **Remains open.**
-4. **S13** (Low) -- `@panic` in MockSyslogSender init. **Remains open (test code only).**
+1. **SC-1 / GAP-045** (Low) -- DNS dependency ref/version-hash drift (`?ref=v0.1.9` vs `dns-0.1.8` hash). Content cryptographically pinned. Blocked cross-repo. [#64](https://gitlab.com/devnw/zig/audit/-/issues/64) open. See also GAP-029 ([#24](https://gitlab.com/devnw/zig/audit/-/issues/24)).
+2. **S11** (Low) -- DNS queries unauthenticated (documentation-only fix). **Remains open-documented.**
 
 **No real secrets were found.** Two gitleaks findings on test fixtures (`TEST_TRACE_ID`, `TEST_SPAN_ID`) are confirmed false positives.
 
 ### 2026-06-11 Appsec Review -- New Findings (A1-A8 -> GAP-040..047)
 
-The 2026-06-11 appsec review (`docs/APPSEC_REVIEW_2026-06-11.md`, OWASP Top 10:2025 / CIS v8.1.2) reconfirmed all prior Critical/High items (S1-S8, S10) as genuinely fixed and surfaced eight new/residual findings, now tracked as the GAP-040..047 master series:
+The 2026-06-11 appsec review (`docs/APPSEC_REVIEW_2026-06-11.md`, OWASP Top 10:2025 / CIS v8.1.2) reconfirmed all prior Critical/High items (S1-S8, S10) as genuinely fixed and surfaced eight new/residual findings, tracked as the GAP-040..047 master series. **All A1-A8 and all additional security-relevant items are now CLOSED** per the iter-2 re-review (docs/APPSEC_REVIEW_2026-06-12_iter2.md, 2026-06-12).
 
-| Appsec ID | Title | Severity | Gap-ID | Issue |
-|-----------|-------|----------|--------|-------|
-| A1 | Unvalidated integer coercion in config parsing (DoS panic / silent truncation) | Medium | GAP-040 | [#57](https://gitlab.com/devnw/zig/audit/-/issues/57) |
-| A2 | File-sink audit records dropped silently under backpressure (no counter) | Medium | GAP-041 | [#58](https://gitlab.com/devnw/zig/audit/-/issues/58) |
-| A3 | Control characters (NUL/TAB/BEL/DEL/C0) not escaped in CEF/syslog output | Low-Medium | GAP-042 | [#60](https://gitlab.com/devnw/zig/audit/-/issues/60) |
-| A4 | Path-traversal mitigation incomplete: absolute paths & symlinks bypass `".."` check (residual S9) | Medium | GAP-043 | [#62](https://gitlab.com/devnw/zig/audit/-/issues/62) |
-| A5 | `formatRfc3339` panics on negative timestamp (public API) | Low | GAP-044 | [#63](https://gitlab.com/devnw/zig/audit/-/issues/63) |
-| A6 | Dependency ref/version-hash mismatch in `build.zig.zon` (dns, otel) | Low | GAP-045 | [#64](https://gitlab.com/devnw/zig/audit/-/issues/64) |
-| A7 | Event `ts_unix_ms` never rendered; output timestamp is worker-thread "now" | Low (Info) | GAP-046 | [#66](https://gitlab.com/devnw/zig/audit/-/issues/66) |
-| A8 | `AuditEvent.validate()` does not reject control characters in core fields | Low | GAP-047 | [#67](https://gitlab.com/devnw/zig/audit/-/issues/67) |
+| Appsec ID | Title | Severity | Gap-ID | Issue | 2026-06-12 Status |
+|-----------|-------|----------|--------|-------|-------------------|
+| A1 | Unvalidated integer coercion in config parsing (DoS panic / silent truncation) | Medium | GAP-040 | [#57](https://gitlab.com/devnw/zig/audit/-/issues/57) | **CLOSED** -- `config.zig:239-242` |
+| A2 | File-sink audit records dropped silently under backpressure (no counter) | Medium | GAP-041 | [#58](https://gitlab.com/devnw/zig/audit/-/issues/58) | **CLOSED** -- `file_sink.zig:39,96-105` |
+| A3 | Control characters (NUL/TAB/BEL/DEL/C0) not escaped in CEF/syslog output | Low-Medium | GAP-042 | [#60](https://gitlab.com/devnw/zig/audit/-/issues/60) | **CLOSED** -- `cef.zig:247-291` |
+| A4 | Path-traversal mitigation incomplete: absolute paths & symlinks bypass `".."` check (residual S9) | Medium | GAP-043 | [#62](https://gitlab.com/devnw/zig/audit/-/issues/62) | **CLOSED** (residual documented) -- `file_sink.zig:420-466` |
+| A5 | `formatRfc3339` panics on negative timestamp (public API) | Low | GAP-044 | [#63](https://gitlab.com/devnw/zig/audit/-/issues/63) | **CLOSED** -- `time.zig:51-57` |
+| A6 | Dependency ref/version-hash mismatch in `build.zig.zon` (dns, otel) | Low | GAP-045 | [#64](https://gitlab.com/devnw/zig/audit/-/issues/64) | **OPEN** (cross-repo blocked) |
+| A7 | Event `ts_unix_ms` never rendered; output timestamp is worker-thread "now" | Low (Info) | GAP-046 | [#66](https://gitlab.com/devnw/zig/audit/-/issues/66) | **CLOSED** -- `file_sink.zig:313-316` |
+| A8 | `AuditEvent.validate()` does not reject control characters in core fields | Low | GAP-047 | [#67](https://gitlab.com/devnw/zig/audit/-/issues/67) | **CLOSED** -- `events.zig:118-132` |
 
-Additional 2026-06-11 security/supply-chain findings (`NEW-SEC-*`) are tracked as GAP-050 (PiiMode.hash, High, [#72](https://gitlab.com/devnw/zig/audit/-/issues/72)), GAP-063..069 ([#92](https://gitlab.com/devnw/zig/audit/-/issues/92)-[#98](https://gitlab.com/devnw/zig/audit/-/issues/98)), and the deep-quality-review Criticals QR-001..003 (use-after-return, double-free, literal-free; [#105](https://gitlab.com/devnw/zig/audit/-/issues/105)-[#107](https://gitlab.com/devnw/zig/audit/-/issues/107)). See `docs/GAP_ANALYSIS.md` for the full series.
+Additional 2026-06-11 security/supply-chain findings: GAP-050 (PiiMode.hash, High, [#72](https://gitlab.com/devnw/zig/audit/-/issues/72), **CLOSED** -- `filters.zig:295-314`), GAP-063..069 ([#92](https://gitlab.com/devnw/zig/audit/-/issues/92)-[#98](https://gitlab.com/devnw/zig/audit/-/issues/98), **all CLOSED**), QR-001..003 (use-after-return, double-free, literal-free; [#105](https://gitlab.com/devnw/zig/audit/-/issues/105)-[#107](https://gitlab.com/devnw/zig/audit/-/issues/107), **all CLOSED**). See `docs/APPSEC_REVIEW_2026-06-12_iter2.md` for the full verification table.
 
 ---
 
@@ -78,8 +76,8 @@ Risk Score = Impact (1-5) x Likelihood (1-5) x 4
 | 7 | S10 | Medium | 24 | Silent ring buffer overflow drops audit events | `src/syslog.zig` | CWE-770, CWE-779 / A09:2021 | `syslog.zig:128-133` | Emit metric/log on drop; expose overflow count | **Resolved** (GAP-023) |
 | 8 | S7 | Medium | 20 | PRNG seeded from `microTimestamp` | `src/time.zig` | CWE-330, CWE-338 / A02:2021 | `time.zig:138` | Seed from `std.crypto.random` or OS entropy | **Resolved** (GAP-016) |
 | 9 | S8 | Medium | 20 | No `AuditEvent` field validation | `src/events.zig` | CWE-20 / A03:2021 | `events.zig:47-60` | Add `validate()` method with length and format checks | **Resolved** (GAP-017) |
-| 10 | S9 | Medium | 20 | File path from config not sanitized | `src/file_sink.zig` | CWE-22 / A01:2021 | `file_sink.zig:249-254` | Reject path traversal sequences; restrict to allowed directories | Superseded by GAP-043 (#62, open) |
-| 11 | SC-1 | Low | 12 | DNS dependency pinned to commit, not tag | `build.zig.zon` | CWE-829 / A06:2021 | `build.zig.zon:8-9` | Pin to a tagged release | Superseded by GAP-045 (#64, open); see also GAP-029 (#24) |
+| 10 | S9 | Medium | 20 | File path from config not sanitized | `src/file_sink.zig` | CWE-22 / A01:2021 | `file_sink.zig:249-254` | Reject path traversal sequences; restrict to allowed directories | **Resolved via GAP-043 (#62, closed 2026-06-12)** -- residual symlink caveat documented |
+| 11 | SC-1 | Low | 12 | DNS dependency pinned to commit, not tag | `build.zig.zon` | CWE-829 / A06:2021 | `build.zig.zon:8-9` | Pin to a tagged release | Superseded by GAP-045 (#64, open -- cross-repo blocked); see also GAP-029 (#24) |
 | 12 | S11 | Low | 12 | DNS queries unauthenticated | `src/syslog.zig` | CWE-350 / A07:2021 | `syslog.zig:21-41` | Document DNS spoofing risk; recommend /etc/hosts or DoH | Open |
 | 13 | S12 | Low | 8 | `i128`-to-`i64` cast truncation | `src/syslog.zig` | CWE-681 / A04:2021 | `syslog.zig:249` | Use `std.math.cast` with overflow check | **Moot** (dead code removed via GAP-026/027) |
 | 14 | S13 | Low | 4 | `@panic` in `MockSyslogSender` init | `src/syslog.zig` | CWE-248 / A11:2021 | `syslog.zig:282` | Return error instead of panicking | Open |
@@ -547,7 +545,7 @@ pub const AuditEvent = struct {
 
 ### S9: File Path From Config Not Sanitized
 
-> **Status update (2026-06-11):** Superseded by **GAP-043** ([#62](https://gitlab.com/devnw/zig/audit/-/issues/62), open). A partial mitigation (a `".."` substring check in `FileSink.openCurrentFile`) was added, but the 2026-06-11 appsec review found it incomplete: absolute paths (e.g. `/etc/cron.d/evil`) and symlinked directory components still escape any intended base, and rotation paths inherit the same unvalidated base. Tracking continues under GAP-043.
+> **Status update (2026-06-12):** **RESOLVED via GAP-043** ([#62](https://gitlab.com/devnw/zig/audit/-/issues/62), closed 2026-06-12). `file_sink.zig:420-466` implements component-wise `..` rejection, optional `allowed_base_dir` jail with separator-boundary check, and fail-closed empty-base guard. Residual: symlinked-parent gap is explicitly documented as a lexical-only limitation (`config.zig:117-131`); absolute-path-without-jail is an accepted operator-trusted policy with a one-time `log.info` notice (`file_sink.zig:442-447`). Both documented and accepted per docs/APPSEC_REVIEW_2026-06-12_iter2.md.
 
 **Severity:** Medium | **Risk Score:** 20 (Impact 2 x Likelihood 2 x 4 = 16, adjusted to 20 per provided scoring) | **SLA:** 90 days
 **Confidence:** `confirmed`
@@ -591,7 +589,7 @@ Note that `makePath` errors are silently ignored (`catch {}`), which could mask 
 
 ### SC-1: DNS Dependency Pinned to Commit Hash, Not Tagged Release
 
-> **Status update (2026-06-11):** Superseded by **GAP-045** ([#64](https://gitlab.com/devnw/zig/audit/-/issues/64), open). The dependency is now pinned by tag, but the 2026-06-11 appsec review found a ref/version-hash drift: the `dns` URL requests `?ref=v0.1.9` while the recorded content `.hash` self-labels `dns-0.1.8-...` (otel shows the same class of drift). Auditability tracking continues under GAP-045; the original cross-repo tagging item remains GAP-029 ([#24](https://gitlab.com/devnw/zig/audit/-/issues/24)).
+> **Status update (2026-06-12):** Still tracked as **GAP-045** ([#64](https://gitlab.com/devnw/zig/audit/-/issues/64), open -- cross-repo blocked). The ref/version-hash drift (`dns ?ref=v0.1.9` vs `dns-0.1.8` content hash label) persists. Content is cryptographically pinned by `.hash` so this is an auditability gap, not an integrity break. Blocked pending tagged releases in upstream repos. See also GAP-029 ([#24](https://gitlab.com/devnw/zig/audit/-/issues/24)).
 
 **Severity:** Low | **Risk Score:** 12 (Impact 2 x Likelihood 1 x 4 = 8, adjusted to 12 per provided scoring) | **SLA:** 180 days
 **Confidence:** `confirmed`

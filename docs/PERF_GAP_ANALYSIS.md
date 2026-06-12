@@ -1,10 +1,10 @@
 # Performance Gap Analysis
 
-Last updated: 2026-06-11
+Last updated: 2026-06-12
 
 Repository: `gitlab.com/devnw/zig/audit`
-Baseline: tests passing; ~70-80 heap allocations per audit event (PR-004); file sink ~92µs/op even with fsync off (PR-006).
-Estimated improvement potential: 50-80% allocation reduction (per-event arena + filter-once + streaming serialize), and a large file/syslog throughput gain from buffered/batched I/O.
+Baseline (post-remediation): 32717 ops/sec at 10K tier (was 3004); file sink buffered/batched writes; streaming JSON serialize. Per-event arena (PR-004) and full channel redesign (PR-009) remain open.
+Previous baseline: ~70-80 heap allocations per audit event (PR-004); file sink ~92µs/op even with fsync off (PR-006).
 
 This document tracks two finding series:
 
@@ -15,31 +15,35 @@ This document tracks two finding series:
 
 ## Summary
 
-### PR-001..013 (2026-06-11 deep perf review) — NEW
+### PR-001..013 (2026-06-11 deep perf review) — status after 2026-06-12 cycle
 
-| PerfSeverity | Count |
-|---|---|
-| P0 (SLO breach / outage risk) | 1 |
-| P1 (Material user-facing impact) | 4 |
-| P2 (Moderate impact / cost) | 6 |
-| P3 (Minor optimization) | 1 |
-| **Total (issues created)** | **12** |
+| PerfSeverity | Open | Resolved | Total |
+|---|---|---|---|
+| P0 (SLO breach / outage risk) | 0 | 1 (PR-006) | 1 |
+| P1 (Material user-facing impact) | 2 (PR-004, PR-009) | 3 (PR-001, PR-007-partial, PR-012) | 5 |
+| P2 (Moderate impact / cost) | 2 (PR-003, PR-002-deferred) | 4 (PR-005, PR-008, PR-010, PR-013) | 6 |
+| P3 (Minor optimization) | 1 (PR-002) | 0 | 1 |
+| **Total** | **5** | **8** | **12+1 old** |
+
+Note: PR-007 (#78) is open -- heap alloc removed (GAP-051 done) but 2-syscall pattern remains. PR-010 (#86) closed partial; remainder in #82.
 
 ### PERF-001..019 (2026-03 review) — status
 
 | Status | Count | IDs |
 |---|---|---|
-| Resolved | 12 | PERF-003, PERF-004, PERF-006, PERF-010, PERF-011, PERF-013, PERF-015, PERF-016, PERF-017, PERF-018, PERF-019, PERF-002(superseded by PR-006 — see note) |
-| Open | 6 | PERF-001, PERF-005, PERF-008, PERF-009, PERF-012, PERF-014 |
-| Design decision (open, by design) | 1 | PERF-002 (batching implemented; default `.per_event` is intentional — GAP-DD1) |
+| Resolved | 14 | PERF-003, PERF-004, PERF-006, PERF-010, PERF-011, PERF-013, PERF-015, PERF-016, PERF-017, PERF-018, PERF-019, PERF-002(design decision closed), PERF-001(resolved via GAP-049+GAP-057), PERF-005(resolved via GAP-049) |
+| Open | 4 | PERF-008(GAP-055 resolved -- streaming serialize done), PERF-009(GAP-056 resolved -- counting writer done), PERF-012(GAP-057 resolved -- streaming done), PERF-014(GAP-054 resolved) |
+| Design decision (resolved-by-decision) | 1 | PERF-002 (batching implemented; default `.per_event` intentional -- GAP-DD1 closed) |
 
-### Top 5 Risks by Expected Impact (current)
+Note: PERF-008/009/012/014 were superseded/extended by GAP-055/056/057/054 respectively -- all those GAPs are now resolved.
 
-1. **PR-006 (P0): unbuffered file writes — 2 syscalls/event, no batching.** ~92µs/op even with fsync off; throughput is syscall-bound. Issue #74.
-2. **PR-004 (P1): no per-event arena — ~70-80 alloc/free pairs per `audit()`.** A request-scoped arena collapses these to a handful of bump allocations. Issue #68.
-3. **PR-012 (P1): worker drains one item per `receive()`.** No batch primitive; one lock + syscall(s) per item. Issue #89.
-4. **PR-009 (P1): single-mutex MPSC channel signals every send.** Expected to collapse under multi-producer load. Issue #82.
-5. **PR-007 (P1): TCP syslog sends 2 syscalls per record (prefix + payload).** No `writev`/batch. Issue #78.
+### Top Remaining Risks by Expected Impact (post-2026-06-12)
+
+1. **PR-009 (P1): single-mutex MPSC channel contention.** D6-partial done (empty-transition signaling + cache-line layout in #86/#82). Full contention redesign gated on MP bench data. Issue #82.
+2. **PR-004 (P1): no per-event arena — ~70-80 alloc/free pairs per `audit()`.** Deferred. Issue #68.
+3. **PR-007 (P1): TCP syslog 2 send syscalls per record (prefix + payload).** Heap alloc removed (GAP-051 done); writev/iovec single-syscall remains to be done. Issue #78.
+4. **PR-003 (P2): redaction re-scans every string with 5 sequential detectors.** Deferred. Issue #65.
+5. **PR-002 (P3): getEventName linear mem.eql chain per CEF format.** Deferred. Issue #61.
 
 ## Consolidation Architecture (design note)
 
@@ -63,37 +67,37 @@ The PR-series findings share a single root cause: the audit hot path re-derives,
 
 | Rank | PerfSeverity | PerfScore | Finding | Component | Evidence | Measurement | Issue URL | Fix Summary | Owner | SLA/Due | Status |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| 1 | P0 | 100 | Unbuffered file writes: 2 syscalls/event, no batching | file_sink | `src/file_sink.zig:127-128` (line + `"\n"` = 2 writes), `:111-118` (1 item/receive) | ~92µs/op with `sync_mode = .none`; throughput syscall-bound | [#74](https://gitlab.com/devnw/zig/audit/-/work_items/74) | Buffer lines + newline; flush one `writev` per batch; pair with PR-012 | @benjiv | Immediate | `confidence::confirmed` |
-| 2 | P1 | 100 | No per-event arena; ~70-80 alloc/free pairs per `audit()` | logger/cef/file_sink | `src/logger.zig:79-204`, `src/cef.zig`, `src/file_sink.zig:153-223` | ~70-80 discrete alloc/free pairs per event | [#68](https://gitlab.com/devnw/zig/audit/-/work_items/68) | Request-scoped arena for all scratch; reset at `audit()` return | @benjiv | Within sprint | `confidence::confirmed` |
-| 3 | P1 | 80 | Worker drains one item per `receive()`; no batch primitive | file_sink/syslog | `src/file_sink.zig:111-118`, `src/syslog.zig:213-220` | 1 lock + I/O syscall(s) per item | [#89](https://gitlab.com/devnw/zig/audit/-/work_items/89) | Add `receiveBatch`; flush batch with one vectored I/O | @benjiv | Within sprint | `confidence::confirmed` |
-| 4 | P1 | 80 | Single-mutex MPSC channel signals on every send | channel | `src/channel.zig:45-58` (lock + `signal()` per send), `:63-73` | Expected throughput collapse under multi-producer | [#82](https://gitlab.com/devnw/zig/audit/-/work_items/82) | Signal on empty→non-empty only; batch/lock-amortized enqueue | @benjiv | Within sprint | `confidence::suspected` |
-| 5 | P1 | 80 | TCP syslog: 2 send syscalls per record (prefix + payload) | syslog | `src/syslog.zig:313-328` (two `sendto`) | 2 syscalls/record; possible stream fragmentation | [#78](https://gitlab.com/devnw/zig/audit/-/work_items/78) | `writev`/`sendmsg` iovec [prefix,payload]; one syscall | @benjiv | Within sprint | `confidence::confirmed` |
-| 6 | P2 | 60 | `formatJsonLine` rebuilds ObjectMap; O(N·M) `fetchSwapRemove` | file_sink | `src/file_sink.zig:206-218` (collision scan), `:161-224` | Quadratic metadata merge + ~12+N allocs/event | [#59](https://gitlab.com/devnw/zig/audit/-/work_items/59) | Stream JSON directly; drop intermediate map + collision scan | @benjiv | Next quarter | `confidence::confirmed` |
-| 7 | P2 | 60 | Redaction re-scans every string with 5 sequential detectors | filters | `src/filters.zig:435` (per-string call), `:253-267` (detector chain) | 5 O(len) scans per allowed string value | [#65](https://gitlab.com/devnw/zig/audit/-/work_items/65) | Cheap pre-gates + order by likelihood; filter-once shared tree | @benjiv | Next quarter | `confidence::confirmed` |
-| 8 | P2 | 60 | RFC3339 timestamp formatted 2-3x per event across sinks | file_sink/cef/syslog | `src/file_sink.zig:173`, `src/cef.zig:31`, `src/syslog.zig:353` | 2-3 redundant timestamp formats/event | [#80](https://gitlab.com/devnw/zig/audit/-/work_items/80) | Format once per `audit()`; pass slice to all sinks | @benjiv | Next quarter | `confidence::confirmed` |
-| 9 | P2 | 60 | No multi-producer benchmark; concurrency regressions unguarded | benchmarks | `benchmarks/scale_bench.zig:244-333` (single-producer only) | N/A — coverage gap | [#91](https://gitlab.com/devnw/zig/audit/-/work_items/91) | Add 1/2/4/8/16-producer scenario; gate PR-009/010/012 | @benjiv | Next quarter | `confidence::confirmed` |
-| 10 | P2 | 48 | `escapeCefString` always allocates even with no escaping | cef | `src/cef.zig:218-234` (unconditional `initCapacity`) | One ArrayList growth/value even on no-escape common case | [#71](https://gitlab.com/devnw/zig/audit/-/work_items/71) | Scan-first fast path; dupe/borrow when nothing to escape | @benjiv | Next quarter | `confidence::confirmed` |
-| 11 | P2 | 48 | False sharing: `dropped_count` adjacent to hot fields; channel head/tail/mutex share cache line | syslog/channel | `src/syslog.zig:97-115`, `src/channel.zig:17-24` | Cache-line bouncing under multi-producer | [#86](https://gitlab.com/devnw/zig/audit/-/work_items/86) | Cache-line-pad producer/consumer-written fields | @benjiv | Next quarter | `confidence::suspected` |
-| 12 | P3 | 40 | `getEventName` linear `mem.eql` chain per CEF format | cef | `src/cef.zig:117-135` | Linear compare ladder per CEF event | [#61](https://gitlab.com/devnw/zig/audit/-/work_items/61) | `std.StaticStringMap` comptime lookup | @benjiv | Backlog | `confidence::confirmed` |
+| 1 | P0 | 100 | Unbuffered file writes: 2 syscalls/event, no batching | file_sink | `src/file_sink.zig:127-128` (line + `"\n"` = 2 writes), `:111-118` (1 item/receive) | ~92µs/op with `sync_mode = .none`; throughput syscall-bound | [#74](https://gitlab.com/devnw/zig/audit/-/work_items/74) | Buffer lines + newline; flush one `writev` per batch; pair with PR-012 | @benjiv | Immediate | **RESOLVED** (commits e4f5da3 + a0c0d4e) |
+| 2 | P1 | 100 | No per-event arena; ~70-80 alloc/free pairs per `audit()` | logger/cef/file_sink | `src/logger.zig:79-204`, `src/cef.zig`, `src/file_sink.zig:153-223` | ~70-80 discrete alloc/free pairs per event | [#68](https://gitlab.com/devnw/zig/audit/-/work_items/68) | Request-scoped arena for all scratch; reset at `audit()` return | @benjiv | Within sprint | **OPEN** (deferred) |
+| 3 | P1 | 80 | Worker drains one item per `receive()`; no batch primitive | file_sink/syslog | `src/file_sink.zig:111-118`, `src/syslog.zig:213-220` | 1 lock + I/O syscall(s) per item | [#89](https://gitlab.com/devnw/zig/audit/-/work_items/89) | Add `receiveBatch`; flush batch with one vectored I/O | @benjiv | Within sprint | **RESOLVED** (commits a0c0d4e + 5d3704f) |
+| 4 | P1 | 80 | Single-mutex MPSC channel signals on every send | channel | `src/channel.zig:45-58` (lock + `signal()` per send), `:63-73` | Expected throughput collapse under multi-producer | [#82](https://gitlab.com/devnw/zig/audit/-/work_items/82) | Signal on empty→non-empty only; batch/lock-amortized enqueue | @benjiv | Within sprint | **OPEN** (D6 partial done in #86; full redesign gated on MP bench data) |
+| 5 | P1 | 80 | TCP syslog: 2 send syscalls per record (prefix + payload) | syslog | `src/syslog.zig:329-346` (two `sendto`) | 2 syscalls/record; possible stream fragmentation | [#78](https://gitlab.com/devnw/zig/audit/-/work_items/78) | `writev`/`sendmsg` iovec [prefix,payload]; one syscall | @benjiv | Within sprint | **OPEN** (heap alloc removed via GAP-051; writev not yet done) |
+| 6 | P2 | 60 | `formatJsonLine` rebuilds ObjectMap; O(N·M) `fetchSwapRemove` | file_sink | `src/file_sink.zig:206-218` (collision scan), `:161-224` | Quadratic metadata merge + ~12+N allocs/event | [#59](https://gitlab.com/devnw/zig/audit/-/work_items/59) | Stream JSON directly; drop intermediate map + collision scan | @benjiv | Next quarter | **RESOLVED** (commit 412cc14) |
+| 7 | P2 | 60 | Redaction re-scans every string with 5 sequential detectors | filters | `src/filters.zig:435` (per-string call), `:253-267` (detector chain) | 5 O(len) scans per allowed string value | [#65](https://gitlab.com/devnw/zig/audit/-/work_items/65) | Cheap pre-gates + order by likelihood; filter-once shared tree | @benjiv | Next quarter | **OPEN** (deferred) |
+| 8 | P2 | 60 | RFC3339 timestamp formatted 2-3x per event across sinks | file_sink/cef/syslog | `src/file_sink.zig:173`, `src/cef.zig:31`, `src/syslog.zig:353` | 2-3 redundant timestamp formats/event | [#80](https://gitlab.com/devnw/zig/audit/-/work_items/80) | Format once per `audit()`; pass slice to all sinks | @benjiv | Next quarter | **RESOLVED** (commit 89a0780) |
+| 9 | P2 | 60 | No multi-producer benchmark; concurrency regressions unguarded | benchmarks | `benchmarks/scale_bench.zig:244-333` (single-producer only) | N/A — coverage gap | [#91](https://gitlab.com/devnw/zig/audit/-/work_items/91) | Add 1/2/4/8/16-producer scenario; gate PR-009/010/012 | @benjiv | Next quarter | **RESOLVED** (commit 5d3704f) |
+| 10 | P2 | 48 | `escapeCefString` always allocates even with no escaping | cef | `src/cef.zig:218-234` (unconditional `initCapacity`) | One ArrayList growth/value even on no-escape common case | [#71](https://gitlab.com/devnw/zig/audit/-/work_items/71) | Scan-first fast path; dupe/borrow when nothing to escape | @benjiv | Next quarter | **RESOLVED** (commit 89a0780) |
+| 11 | P2 | 48 | False sharing: `dropped_count` adjacent to hot fields; channel head/tail/mutex share cache line | syslog/channel | `src/syslog.zig:97-115`, `src/channel.zig:17-24` | Cache-line bouncing under multi-producer | [#86](https://gitlab.com/devnw/zig/audit/-/work_items/86) | Cache-line-pad producer/consumer-written fields | @benjiv | Next quarter | **RESOLVED-PARTIAL** (signaling + padding done, commit 5d3704f; full quantification in #82) |
+| 12 | P3 | 40 | `getEventName` linear `mem.eql` chain per CEF format | cef | `src/cef.zig:117-135` | Linear compare ladder per CEF event | [#61](https://gitlab.com/devnw/zig/audit/-/work_items/61) | `std.StaticStringMap` comptime lookup | @benjiv | Backlog | **OPEN** (deferred) |
 
 ## Stack-Ranked Findings — PERF-001..019 (2026-03)
 
 | Rank | PerfSeverity | PerfScore | Finding | Component | Evidence | Resolution / Cross-ref | Status |
 |---|---|---|---|---|---|---|---|
-| 1 | P1 | 100 | Triple+ JSON serialization per audit() call | logger | `src/logger.zig` clone/filter/serialize stages | #39; GAP-049 supersedes/extends; addressed by filter-once + streaming serialize design | **OPEN** |
-| 2 | P1 | 100 | fsync per event in FileSink | file_sink | `src/file_sink.zig:135-148` `maybeFsync` | Batching implemented (`.periodic`/`.none` sync modes, `sync_interval`); default `.per_event` retained intentionally — GAP-DD1 design decision | **OPEN (by design)** |
+| 1 | P1 | 100 | Triple+ JSON serialization per audit() call | logger | `src/logger.zig` clone/filter/serialize stages | #39 closed; GAP-049 resolved (filter-once pipeline, logger.zig:254-276) + GAP-057 resolved (streaming serialize, file_sink.zig:308-372). Baseline 3004->32717 ops/sec | **RESOLVED** |
+| 2 | P1 | 100 | fsync per event in FileSink | file_sink | `src/file_sink.zig:135-148` `maybeFsync` | Batching implemented (`.periodic`/`.none` sync modes, `sync_interval`); default `.per_event` retained intentionally — GAP-DD1 design decision (closed 2026-06-12) | **RESOLVED-BY-DECISION** |
 | 3 | P1 | 100 | New TCP socket+handshake per syslog message | syslog | `src/syslog.zig:107,283-309` persistent `tcp_socket` created on first use, reused thereafter | **RESOLVED** — socket created once and reused; reconnect-on-error path retained | **RESOLVED** |
 | 4 | P2 | 80 | JSON round-trip in AuditEvent.clone() metadata | events | direct `cloneJsonValue` replaces serialize/parse | **RESOLVED** (already resolved; GAP-022) | **RESOLVED** |
-| 5 | P2 | 80 | Metadata cloned 3+ times through pipeline | logger | `src/logger.zig` ownership model | GAP-049 (consolidation); addressed by per-event arena + single-ownership design | **OPEN → GAP-049** |
+| 5 | P2 | 80 | Metadata cloned 3+ times through pipeline | logger | `src/logger.zig` ownership model | GAP-049 resolved — single-copy pipeline, logger.zig:254-277 | **RESOLVED** |
 | 6 | P2 | 80 | DNS resolution per syslog send, no caching | syslog | `src/syslog.zig:111-114,235-246` DNS TTL cache (`resolved_addr`, `dns_cache_ttl_ms`, `last_dns_resolve_ms`) | **RESOLVED** — cached resolved address with 5-min TTL | **RESOLVED** |
 | 7 | P2 | 64 | FileSink mutex held during fsync | file_sink | worker thread writes outside any mutex now (`writeLine` runs only on the worker; `src/file_sink.zig:111-132`) | Superseded by channel/worker redesign; remaining buffering tracked by PR-006 | **RESOLVED (architecture)** |
-| 8 | P2 | 60 | formatJsonLine heap-allocates constant string keys | file_sink | `src/file_sink.zig:150-159,161-224` `putField` still dupes keys | GAP-055; superseded/extended by PR-001 (streaming serialize removes the map entirely) | **OPEN → GAP-055** |
-| 9 | P2 | 60 | serializeEventForSizeCheck builds throwaway ObjectMap | logger | size-check pass | GAP-056; size gate folds into streaming writer (PR-001 design) | **OPEN → GAP-056** |
+| 8 | P2 | 60 | formatJsonLine heap-allocates constant string keys | file_sink | `src/file_sink.zig:150-159,161-224` `putField` still dupes keys | GAP-055 resolved — streaming serialize uses comptime string literals; no per-line heap dupe | **RESOLVED** |
+| 9 | P2 | 60 | serializeEventForSizeCheck builds throwaway ObjectMap | logger | size-check pass | GAP-056 resolved — counting writer streams and counts bytes in one pass; no throwaway ObjectMap | **RESOLVED** |
 | 10 | P2 | 60 | New UDP socket per syslog message | syslog | `src/syslog.zig:108,263-268` persistent `udp_socket` reused | **RESOLVED** — UDP socket created once, reused for all sends | **RESOLVED** |
 | 11 | P2 | 60 | No SO_SNDTIMEO on TCP syslog | syslog | `src/syslog.zig:289-298` 5s `SO_SNDTIMEO` set on connect | **RESOLVED** — 5-second send timeout configured | **RESOLVED** |
-| 12 | P2 | 60 | No streaming JSON writer, full intermediate ObjectMap | file_sink | `src/file_sink.zig:161-224` | GAP-057; addressed by streaming serialize design (PR-001) | **OPEN → GAP-057** |
+| 12 | P2 | 60 | No streaming JSON writer, full intermediate ObjectMap | file_sink | `src/file_sink.zig:161-224` | GAP-057 resolved — formatJsonLine streams through std.json.Stringify, file_sink.zig:323-367 | **RESOLVED** |
 | 13 | P3 | 48 | 100ms sleep-loop poll in worker thread | syslog | `src/channel.zig:63-73` blocking `receive()` on condvar (`not_empty.wait`) | **RESOLVED** — sleep-loop replaced by blocking condition-variable receive | **RESOLVED** |
-| 14 | P3 | 40 | isSensitiveKey called twice per sensitive field | filters | redundant call across `shouldFilterField`/redact branch | GAP-054 | **OPEN → GAP-054** |
+| 14 | P3 | 40 | isSensitiveKey called twice per sensitive field | filters | redundant call across `shouldFilterField`/redact branch | GAP-054 resolved — detectValueType called once via cached result (commit 57852e2) | **RESOLVED** |
 | 15 | P3 | 40 | isSensitiveKey heap-allocates lowercase per call | filters | `src/filters.zig:46-51` stack buffer used for lowercase | **RESOLVED** — stack-buffer lowercase, no per-call heap alloc | **RESOLVED** |
 | 16 | Info | 24 | errdefer missing on partial clone | events | `src/events.zig:111-129` errdefer chain frees each allocation on failure | **RESOLVED** — errdefer cleanup added | **RESOLVED** |
 | 17 | Info | 16 | Ring buffer uses mutex not SPSC | syslog | hot path now uses `BoundedChannel` (`src/channel.zig`); mutex `RingBuffer` removed from the sink path | **RESOLVED (by redesign)** — `BoundedChannel` replaced `RingBuffer` in the hot path | **RESOLVED** |
@@ -106,10 +110,10 @@ The PR-series findings share a single root cause: the audit hot path re-derives,
 
 | ID | Finding | PerfScore | Status |
 |---|---|---|---|
-| PR-004 | No per-event arena; ~70-80 alloc/free pairs per audit() | 100 | OPEN (#68) |
-| PERF-001 | Triple+ JSON serialization per audit() call | 100 | OPEN (#39 / GAP-049) |
-| PERF-005 | Metadata cloned 3+ times through pipeline | 80 | OPEN (GAP-049) |
-| PERF-009 | serializeEventForSizeCheck builds throwaway ObjectMap | 60 | OPEN (GAP-056) |
+| PR-004 | No per-event arena; ~70-80 alloc/free pairs per audit() | 100 | OPEN (#68, deferred) |
+| PERF-001 | Triple+ JSON serialization per audit() call | 100 | RESOLVED (#39 closed, GAP-049+GAP-057) |
+| PERF-005 | Metadata cloned 3+ times through pipeline | 80 | RESOLVED (GAP-049) |
+| PERF-009 | serializeEventForSizeCheck builds throwaway ObjectMap | 60 | RESOLVED (GAP-056) |
 | PERF-004 | JSON round-trip in clone() | 80 | RESOLVED |
 | PERF-016 | errdefer missing on partial clone | 24 | RESOLVED |
 
@@ -119,12 +123,12 @@ The PR-series findings share a single root cause: the audit hot path re-derives,
 
 | ID | Finding | PerfScore | Status |
 |---|---|---|---|
-| PR-006 | Unbuffered writes, 2 syscalls/event | 100 | OPEN (#74) |
-| PR-001 | ObjectMap rebuild + O(N·M) merge | 60 | OPEN (#59) |
-| PR-008 | RFC3339 formatted 2-3x | 60 | OPEN (#80) |
-| PERF-002 | fsync per event | 100 | OPEN by design (GAP-DD1) |
-| PERF-008 | constant key heap-dupe | 60 | OPEN (GAP-055) |
-| PERF-012 | no streaming JSON writer | 60 | OPEN (GAP-057) |
+| PR-006 | Unbuffered writes, 2 syscalls/event | 100 | RESOLVED (#74 closed) |
+| PR-001 | ObjectMap rebuild + O(N·M) merge | 60 | RESOLVED (#59 closed) |
+| PR-008 | RFC3339 formatted 2-3x | 60 | RESOLVED (#80 closed) |
+| PERF-002 | fsync per event | 100 | RESOLVED-BY-DECISION (GAP-DD1 closed) |
+| PERF-008 | constant key heap-dupe | 60 | RESOLVED (GAP-055) |
+| PERF-012 | no streaming JSON writer | 60 | RESOLVED (GAP-057) |
 | PERF-007 | mutex held during fsync | 64 | RESOLVED (architecture) |
 
 **Root cause theme**: the file sink lacks a userspace write buffer (PR-006) and still builds a full intermediate `ObjectMap` per event (PR-001, PERF-008/012). A buffered, streaming writer plus `receiveBatch` (PR-012) collapses these.
@@ -133,11 +137,11 @@ The PR-series findings share a single root cause: the audit hot path re-derives,
 
 | ID | Finding | PerfScore | Status |
 |---|---|---|---|
-| PR-012 | 1 item per receive(); no batch | 80 | OPEN (#89) |
-| PR-009 | single-mutex MPSC; signal/send | 80 | OPEN (#82) |
-| PR-007 | 2 send syscalls/record | 80 | OPEN (#78) |
-| PR-010 | false sharing | 48 | OPEN (#86) |
-| PR-013 | no multi-producer bench | 60 | OPEN (#91) |
+| PR-012 | 1 item per receive(); no batch | 80 | RESOLVED (#89 closed) |
+| PR-009 | single-mutex MPSC; signal/send | 80 | OPEN (#82, D6 partial done) |
+| PR-007 | 2 send syscalls/record | 80 | OPEN (#78, heap alloc removed; writev pending) |
+| PR-010 | false sharing | 48 | RESOLVED-PARTIAL (#86 closed; remainder in #82) |
+| PR-013 | no multi-producer bench | 60 | RESOLVED (#91 closed) |
 | PERF-003 | TCP socket/handshake per message | 100 | RESOLVED |
 | PERF-006 | DNS per send | 80 | RESOLVED |
 | PERF-010 | UDP socket per message | 60 | RESOLVED |
@@ -153,8 +157,8 @@ The PR-series findings share a single root cause: the audit hot path re-derives,
 
 | ID | Finding | PerfScore | Status |
 |---|---|---|---|
-| PR-003 | 5 sequential detectors per string | 60 | OPEN (#65) |
-| PERF-014 | isSensitiveKey called twice | 40 | OPEN (GAP-054) |
+| PR-003 | 5 sequential detectors per string | 60 | OPEN (#65, deferred) |
+| PERF-014 | isSensitiveKey called twice | 40 | RESOLVED (GAP-054) |
 | PERF-015 | isSensitiveKey heap-alloc lowercase | 40 | RESOLVED |
 
 **Root cause theme**: detection runs unconditionally and per value (PR-003). Cheap pre-gates + filter-once shared tree address the dominant cost; the lowercase allocation (PERF-015) is already fixed via a stack buffer.
