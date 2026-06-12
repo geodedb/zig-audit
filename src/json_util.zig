@@ -49,17 +49,42 @@ pub fn cloneJsonValue(allocator: std.mem.Allocator, value: std.json.Value) !std.
         .string => |s| std.json.Value{ .string = try allocator.dupe(u8, s) },
         .array => |arr| blk: {
             var cloned_array = std.json.Array.init(allocator);
+            // GAP-048: on mid-loop OOM, free every item cloned so far plus
+            // the array's backing storage instead of leaking the partial clone.
+            errdefer {
+                for (cloned_array.items) |item| {
+                    freeJsonValue(allocator, item);
+                }
+                cloned_array.deinit();
+            }
             for (arr.items) |item| {
-                try cloned_array.append(try cloneJsonValue(allocator, item));
+                const cloned_item = try cloneJsonValue(allocator, item);
+                // Not yet owned by cloned_array if append fails.
+                errdefer freeJsonValue(allocator, cloned_item);
+                try cloned_array.append(cloned_item);
             }
             break :blk std.json.Value{ .array = cloned_array };
         },
         .object => |obj| blk: {
             var cloned_map: std.json.ObjectMap = .empty;
+            // GAP-048: on mid-loop OOM, free every key/value already in the
+            // map plus its backing storage instead of leaking the partial clone.
+            errdefer {
+                var cloned_iter = cloned_map.iterator();
+                while (cloned_iter.next()) |entry| {
+                    allocator.free(entry.key_ptr.*);
+                    freeJsonValue(allocator, entry.value_ptr.*);
+                }
+                cloned_map.deinit(allocator);
+            }
             var iter = obj.iterator();
             while (iter.next()) |entry| {
                 const cloned_key = try allocator.dupe(u8, entry.key_ptr.*);
+                // Key is orphaned if the value clone or the put fails.
+                errdefer allocator.free(cloned_key);
                 const cloned_value = try cloneJsonValue(allocator, entry.value_ptr.*);
+                // Value is orphaned if the put fails.
+                errdefer freeJsonValue(allocator, cloned_value);
                 try cloned_map.put(allocator, cloned_key, cloned_value);
             }
             break :blk std.json.Value{ .object = cloned_map };
@@ -132,6 +157,49 @@ test "cloneJsonValue deep-clones nested object" {
     try std.testing.expect(cloned_nested == .object);
     const cloned_b = cloned_nested.object.get("b") orelse unreachable;
     try std.testing.expect(cloned_b.integer == 42);
+}
+
+test "cloneJsonValue frees partial clones on OOM (GAP-048)" {
+    const allocator = std.testing.allocator;
+
+    // Array fixture: 4 duped strings so a clone needs several allocations
+    // (dupe per item + ArrayList growth) — plenty of mid-loop failure points.
+    var arr = std.json.Array.init(allocator);
+    for (0..4) |_| {
+        try arr.append(std.json.Value{ .string = try allocator.dupe(u8, "payload") });
+    }
+    const arr_val = std.json.Value{ .array = arr };
+    defer freeJsonValue(allocator, arr_val);
+
+    // Object fixture: 3 entries — each clone iteration allocates the key,
+    // then the value, then (possibly) map storage, so the sweep below hits
+    // the window BETWEEN key-dupe and value-clone too (key must be freed).
+    var obj: std.json.ObjectMap = .empty;
+    try obj.put(allocator, try allocator.dupe(u8, "k1"), std.json.Value{ .string = try allocator.dupe(u8, "v1") });
+    try obj.put(allocator, try allocator.dupe(u8, "k2"), std.json.Value{ .string = try allocator.dupe(u8, "v2") });
+    try obj.put(allocator, try allocator.dupe(u8, "k3"), std.json.Value{ .string = try allocator.dupe(u8, "v3") });
+    const obj_val = std.json.Value{ .object = obj };
+    defer freeJsonValue(allocator, obj_val);
+
+    // Sweep every failure point. For each fail index either the clone
+    // errors (and must have released everything allocated so far) or it
+    // succeeds (and we free it normally). std.testing.allocator's leak
+    // check at test end proves no partial clone was leaked.
+    for (0..16) |i| {
+        var failing_arr = std.testing.FailingAllocator.init(allocator, .{ .fail_index = i });
+        if (cloneJsonValue(failing_arr.allocator(), arr_val)) |clone| {
+            freeJsonValue(failing_arr.allocator(), clone);
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+        }
+
+        var failing_obj = std.testing.FailingAllocator.init(allocator, .{ .fail_index = i });
+        if (cloneJsonValue(failing_obj.allocator(), obj_val)) |clone| {
+            freeJsonValue(failing_obj.allocator(), clone);
+        } else |err| {
+            try std.testing.expectEqual(error.OutOfMemory, err);
+        }
+    }
 }
 
 test "cloneJsonValue deep-clones array" {
