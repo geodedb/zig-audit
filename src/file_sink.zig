@@ -31,6 +31,7 @@ pub const FileSink = struct {
 
     pub fn init(allocator: std.mem.Allocator, file_config: config.FileSinkConfig, clock: time.Clock) !*FileSink {
         const sink = try allocator.create(FileSink);
+        errdefer allocator.destroy(sink);
         sink.* = FileSink{
             .allocator = allocator,
             .config = file_config,
@@ -41,8 +42,11 @@ pub const FileSink = struct {
             .ch = try BoundedChannel([]const u8).init(allocator, FILE_QUEUE_SIZE),
             .thread = null,
         };
+        // Runs before the destroy above if openCurrentFile/spawn fail (ADV-2).
+        errdefer sink.ch.deinit();
 
         if (file_config.enabled) {
+            errdefer if (sink.current_file) |file| file.close(systemIo());
             try sink.openCurrentFile();
             // daemon: one persistent consumer per file sink. Same rationale as
             // syslog.zig — long-lived ring-buffer consumer, not pool work.
@@ -261,18 +265,58 @@ pub const FileSink = struct {
         try self.openCurrentFile();
     }
 
-    fn openCurrentFile(self: *FileSink) !void {
-        if (std.mem.indexOf(u8, self.config.path, "..") != null) {
-            return error.PathTraversalRejected;
+    /// Validate `config.path` against traversal and the optional jail.
+    ///
+    /// Rejects any path containing a `..` COMPONENT (component-wise check —
+    /// a filename like `my..app.log` is fine). When `allowed_base_dir` is
+    /// set, both paths are lexically resolved and the target must sit under
+    /// the base (string prefix + separator boundary). Symlinked parents are
+    /// NOT resolved — see the doc comment on
+    /// `config.FileSinkConfig.allowed_base_dir`.
+    fn validatePath(self: *FileSink) !void {
+        var it = std.fs.path.componentIterator(self.config.path);
+        while (it.next()) |component| {
+            if (std.mem.eql(u8, component.name, "..")) {
+                return error.PathTraversalRejected;
+            }
         }
+
+        if (self.config.allowed_base_dir) |base| {
+            const resolved_path = try std.fs.path.resolve(self.allocator, &.{self.config.path});
+            defer self.allocator.free(resolved_path);
+            const resolved_base = try std.fs.path.resolve(self.allocator, &.{base});
+            defer self.allocator.free(resolved_base);
+
+            if (!isUnderBase(resolved_base, resolved_path)) {
+                return error.PathOutsideAllowedBase;
+            }
+        }
+    }
+
+    /// True when `target` is lexically under (or equal to) `base`. Both
+    /// arguments must already be lexically resolved. A bare prefix match is
+    /// not enough — the next byte after the prefix must be a path separator
+    /// so `/jail` does not admit `/jailbreak/x.log`.
+    fn isUnderBase(base: []const u8, target: []const u8) bool {
+        if (!std.mem.startsWith(u8, target, base)) return false;
+        if (target.len == base.len) return true;
+        // A resolved base never has a trailing separator except the
+        // filesystem root itself ("/" or e.g. "C:\").
+        if (std.fs.path.isSep(base[base.len - 1])) return true;
+        return std.fs.path.isSep(target[base.len]);
+    }
+
+    fn openCurrentFile(self: *FileSink) !void {
+        try self.validatePath();
 
         const io = systemIo();
         const cwd = std.Io.Dir.cwd();
 
         if (std.fs.path.dirname(self.config.path)) |dir_path| {
-            cwd.createDirPath(io, dir_path) catch |err| {
-                log.warn("audit file rotation failed: {s}", .{@errorName(err)});
-            };
+            // createDirPath succeeds when the directory already exists
+            // (see std.Io.Dir.createDirPathStatus), so any error here is
+            // real and must propagate instead of being swallowed.
+            try cwd.createDirPath(io, dir_path);
         }
 
         self.current_file = try cwd.createFile(io, self.config.path, .{ .truncate = false });
@@ -472,6 +516,112 @@ test "FileSink sync_mode periodic writes to file" {
         if (line.len > 0) line_count += 1;
     }
     try testing.expectEqual(@as(u32, 6), line_count);
+}
+
+test "GAP-043: path with a '..' component is rejected" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap043-trav/../escape/audit.log",
+        .max_bytes = 1024,
+        .backup_count = 0,
+    };
+
+    try testing.expectError(error.PathTraversalRejected, FileSink.init(allocator, file_config, clock));
+}
+
+test "GAP-043: filename containing '..' substring is accepted (false positive fix)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
+    const test_dir = "zig-out/tmp/test-gap043-fp";
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/my..app.log",
+        .max_bytes = 1024,
+        .backup_count = 0,
+    };
+
+    // "my..app.log" contains ".." as a substring but not as a path
+    // component — it must be accepted.
+    const sink = try FileSink.init(allocator, file_config, clock);
+    sink.deinit();
+}
+
+test "GAP-043: allowed_base_dir rejects path outside the base" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap043-outside/x.log",
+        .max_bytes = 1024,
+        .backup_count = 0,
+        .allowed_base_dir = "zig-out/tmp/test-gap043-jail",
+    };
+
+    try testing.expectError(error.PathOutsideAllowedBase, FileSink.init(allocator, file_config, clock));
+}
+
+test "GAP-043: allowed_base_dir accepts path inside the base" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
+    const test_dir = "zig-out/tmp/test-gap043-jail";
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/sub/x.log",
+        .max_bytes = 1024,
+        .backup_count = 0,
+        .allowed_base_dir = test_dir,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+    sink.deinit();
+}
+
+test "GAP-043: allowed_base_dir rejects prefix-only match (jail vs jailbreak)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap043-jailbreak/x.log",
+        .max_bytes = 1024,
+        .backup_count = 0,
+        .allowed_base_dir = "zig-out/tmp/test-gap043-jail",
+    };
+
+    // "...jailbreak" begins with "...jail" as a string prefix but is NOT
+    // under it — the separator boundary check must reject this.
+    try testing.expectError(error.PathOutsideAllowedBase, FileSink.init(allocator, file_config, clock));
 }
 
 test "SyncMode.fromString parses valid modes" {

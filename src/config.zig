@@ -105,6 +105,16 @@ pub const FileSinkConfig = struct {
     backup_count: u32,
     sync_mode: SyncMode = .per_event,
     sync_interval: u32 = 100,
+    /// Optional jail directory for `path`. When set, the lexically resolved
+    /// `path` must be under the lexically resolved base directory or
+    /// `FileSink.init` fails with `error.PathOutsideAllowedBase`.
+    ///
+    /// Enforcement is LEXICAL only: symlinked parent directories are NOT
+    /// resolved (realpath of a not-yet-existing file is unreliable), so a
+    /// symlink inside the base can still point outside it. Operators who
+    /// need symlink-safe containment must guarantee the base directory
+    /// tree contains no hostile symlinks.
+    allowed_base_dir: ?[]const u8 = null,
 };
 
 pub const SyslogRfc5424Config = struct {
@@ -161,6 +171,9 @@ pub const Config = struct {
         self.allocator.free(self.identity.cef.product);
         self.allocator.free(self.identity.cef.version);
         self.allocator.free(self.sinks.file.path);
+        if (self.sinks.file.allowed_base_dir) |base| {
+            self.allocator.free(base);
+        }
         self.allocator.free(self.sinks.syslog.host);
 
         for (self.filters.allow_fields) |field| {
@@ -284,6 +297,12 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
         break :blk try jsonIntegerInRange(u32, file_obj, "sync_interval");
     };
 
+    const allowed_base_dir: ?[]const u8 = blk: {
+        const val = file_obj.get("allowed_base_dir") orelse break :blk null;
+        if (val != .string) return error.InvalidConfig;
+        break :blk try allocator.dupe(u8, val.string);
+    };
+
     const file_sink = FileSinkConfig{
         .enabled = try jsonBool(file_obj, "enabled"),
         .path = try allocator.dupe(u8, try jsonString(file_obj, "path")),
@@ -291,6 +310,7 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
         .backup_count = try jsonIntegerInRange(u32, file_obj, "backup_count"),
         .sync_mode = sync_mode,
         .sync_interval = sync_interval,
+        .allowed_base_dir = allowed_base_dir,
     };
 
     const syslog_obj = try jsonObject(sinks_obj, "syslog");
@@ -473,6 +493,40 @@ test "parseConfig parses sync_mode and sync_interval from JSON" {
 
     try std.testing.expectEqual(SyncMode.periodic, cfg.sinks.file.sync_mode);
     try std.testing.expectEqual(@as(u32, 50), cfg.sinks.file.sync_interval);
+}
+
+test "parseConfig parses optional allowed_base_dir (GAP-043/A4)" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{
+        \\  "version": 1,
+        \\  "service": {"name": "svc", "host": "h", "pid": 1},
+        \\  "identity": {"cef": {"vendor": "V", "product": "P", "version": "1"}},
+        \\  "sinks": {
+        \\    "file": {"enabled": false, "path": "/var/log/audit/a.log", "max_bytes": 1024, "backup_count": 1, "allowed_base_dir": "/var/log/audit"},
+        \\    "syslog": {"enabled": false, "protocol": "udp", "host": "localhost", "port": 514, "rfc5424": {"facility": "local0"}}
+        \\  },
+        \\  "filters": {"default_deny": false, "allow_fields": [], "deny_key_patterns": [], "pii_mode": "off", "pci_mode": false}
+        \\}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    var cfg = try parseConfig(allocator, parsed.value);
+    defer cfg.deinit();
+
+    try std.testing.expectEqualStrings("/var/log/audit", cfg.sinks.file.allowed_base_dir.?);
+}
+
+test "parseConfig defaults allowed_base_dir to null when absent (GAP-043/A4)" {
+    const allocator = std.testing.allocator;
+    var parsed = try buildValidTestJson(allocator);
+    defer parsed.deinit();
+
+    var cfg = try parseConfig(allocator, parsed.value);
+    defer cfg.deinit();
+
+    try std.testing.expect(cfg.sinks.file.allowed_base_dir == null);
 }
 
 test "parseConfig parses sync_mode none" {
