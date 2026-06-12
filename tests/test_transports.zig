@@ -126,7 +126,7 @@ test "file sink JSON formatting" {
         .metadata = metadata,
     };
 
-    try sink.write(&event, metadata);
+    _ = try sink.write(&event, metadata);
 
     // deinit drains queued writes to disk
     // (we can't read while the sink is still alive since workerThread writes are async)
@@ -200,7 +200,7 @@ test "file rotation" {
             .metadata = null,
         };
 
-        try sink.write(&event, null);
+        _ = try sink.write(&event, null);
     }
 
     // deinit drains all queued writes to disk before closing

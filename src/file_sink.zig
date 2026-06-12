@@ -28,6 +28,7 @@ pub const FileSink = struct {
     writes_since_sync: u32,
     ch: BoundedChannel([]const u8),
     thread: ?std.Thread,
+    dropped_count: std.atomic.Value(u64) = .init(0),
 
     pub fn init(allocator: std.mem.Allocator, file_config: config.FileSinkConfig, clock: time.Clock) !*FileSink {
         const sink = try allocator.create(FileSink);
@@ -76,22 +77,41 @@ pub const FileSink = struct {
         self.allocator.destroy(self);
     }
 
+    /// Total events/error messages discarded because the channel was full.
+    pub fn getDroppedCount(self: *FileSink) u64 {
+        return self.dropped_count.load(.monotonic);
+    }
+
+    /// Enqueue an owned line, surfacing channel-full as `.dropped` instead
+    /// of silently discarding (GAP-041/A2). Frees `line` on drop, bumps the
+    /// drop counter, and warns on the first drop and every 1000th after.
+    fn enqueueLine(self: *FileSink, line: []const u8, what: []const u8) events.SendStatus {
+        if (self.ch.trySend(line)) return .enqueued;
+
+        self.allocator.free(line);
+        const n = self.dropped_count.fetchAdd(1, .monotonic) + 1;
+        if (n == 1 or n % 1000 == 0) {
+            log.warn("file sink channel full; dropped {d} {s} so far", .{ n, what });
+        }
+        return .dropped;
+    }
+
     /// Enqueue a formatted JSON line for the background worker to write.
-    /// Returns immediately after enqueue — file I/O happens on the worker thread.
-    pub fn write(self: *FileSink, event: *const events.AuditEvent, filtered_metadata: ?std.json.Value) !void {
-        if (!self.config.enabled) return;
+    /// Returns immediately after enqueue — file I/O happens on the worker
+    /// thread. Returns `.dropped` when the channel is full (the event is
+    /// discarded and counted), `.enqueued` otherwise.
+    pub fn write(self: *FileSink, event: *const events.AuditEvent, filtered_metadata: ?std.json.Value) !events.SendStatus {
+        // A disabled sink accepts nothing and loses nothing.
+        if (!self.config.enabled) return .enqueued;
 
         const json_line = try self.formatJsonLine(event, filtered_metadata);
-
-        if (!self.ch.trySend(json_line)) {
-            log.warn("file sink channel full; dropping audit event", .{});
-            self.allocator.free(json_line);
-        }
+        return self.enqueueLine(json_line, "audit events");
     }
 
     /// Enqueue an error message for the background worker to write.
-    pub fn writeError(self: *FileSink, error_msg: []const u8) !void {
-        if (!self.config.enabled) return;
+    /// Same drop semantics as `write`.
+    pub fn writeError(self: *FileSink, error_msg: []const u8) !events.SendStatus {
+        if (!self.config.enabled) return .enqueued;
 
         var ts_buf: [64]u8 = undefined;
         const timestamp = self.clock.nowRfc3339(&ts_buf);
@@ -103,10 +123,7 @@ pub const FileSink = struct {
         try obj.put(self.allocator, "msg", std.json.Value{ .string = error_msg });
         const error_line = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
 
-        if (!self.ch.trySend(error_line)) {
-            log.warn("file sink channel full; dropping error message", .{});
-            self.allocator.free(error_line);
-        }
+        return self.enqueueLine(error_line, "error messages");
     }
 
     /// Background worker: receives formatted lines from the channel and writes
@@ -391,7 +408,7 @@ test "file sink rotation" {
             .metadata = null,
         };
 
-        try sink.write(&event, null);
+        _ = try sink.write(&event, null);
     }
 
     // deinit drains all queued writes to disk before closing
@@ -459,7 +476,7 @@ test "FileSink sync_mode none writes to file" {
         .metadata = null,
     };
 
-    try sink.write(&event, null);
+    _ = try sink.write(&event, null);
 
     // deinit drains writes to disk
     sink.deinit();
@@ -517,7 +534,7 @@ test "FileSink sync_mode periodic writes to file" {
     // Write 6 events (interval=5, so fsync fires once at event 5)
     var i: u32 = 0;
     while (i < 6) : (i += 1) {
-        try sink.write(&event, null);
+        _ = try sink.write(&event, null);
     }
 
     // deinit drains all queued writes
@@ -672,6 +689,117 @@ test "GAP-043: allowed_base_dir rejects prefix-only match (jail vs jailbreak)" {
     // "...jailbreak" begins with "...jail" as a string prefix but is NOT
     // under it — the separator boundary check must reject this.
     try testing.expectError(error.PathOutsideAllowedBase, FileSink.init(allocator, file_config, clock));
+}
+
+test "GAP-041: write returns .dropped and counts when channel is full" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+
+    // Test-only construction: no worker thread and no file, so the 1-slot
+    // channel stays full deterministically (nothing drains it).
+    var sink = FileSink{
+        .allocator = allocator,
+        .config = .{
+            .enabled = true,
+            .path = "zig-out/tmp/test-gap041-drop/audit.log",
+            .max_bytes = 1024 * 1024,
+            .backup_count = 0,
+        },
+        .clock = fixed_clock.clock(),
+        .current_file = null,
+        .current_size = 0,
+        .writes_since_sync = 0,
+        .ch = try BoundedChannel([]const u8).init(allocator, 1),
+        .thread = null,
+        .dropped_count = .init(0),
+    };
+    defer {
+        while (sink.ch.tryReceive()) |msg| {
+            allocator.free(msg);
+        }
+        sink.ch.deinit();
+    }
+
+    // Fill the single slot so the next enqueue must drop.
+    const dummy = try allocator.dupe(u8, "occupant");
+    try testing.expect(sink.ch.trySend(dummy));
+
+    const event = events.AuditEvent{
+        .category = "test",
+        .action = "drop",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    try testing.expectEqual(@as(u64, 0), sink.getDroppedCount());
+    const status = try sink.write(&event, null);
+    try testing.expectEqual(events.SendStatus.dropped, status);
+    try testing.expectEqual(@as(u64, 1), sink.getDroppedCount());
+
+    const err_status = try sink.writeError("boom");
+    try testing.expectEqual(events.SendStatus.dropped, err_status);
+    try testing.expectEqual(@as(u64, 2), sink.getDroppedCount());
+}
+
+test "GAP-041: write returns .enqueued when the channel has room" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+
+    var sink = FileSink{
+        .allocator = allocator,
+        .config = .{
+            .enabled = true,
+            .path = "zig-out/tmp/test-gap041-enq/audit.log",
+            .max_bytes = 1024 * 1024,
+            .backup_count = 0,
+        },
+        .clock = fixed_clock.clock(),
+        .current_file = null,
+        .current_size = 0,
+        .writes_since_sync = 0,
+        .ch = try BoundedChannel([]const u8).init(allocator, 1),
+        .thread = null,
+        .dropped_count = .init(0),
+    };
+    defer {
+        while (sink.ch.tryReceive()) |msg| {
+            allocator.free(msg);
+        }
+        sink.ch.deinit();
+    }
+
+    const event = events.AuditEvent{
+        .category = "test",
+        .action = "enqueue",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "test-user",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+
+    const status = try sink.write(&event, null);
+    try testing.expectEqual(events.SendStatus.enqueued, status);
+    try testing.expectEqual(@as(u64, 0), sink.getDroppedCount());
 }
 
 test "SyncMode.fromString parses valid modes" {

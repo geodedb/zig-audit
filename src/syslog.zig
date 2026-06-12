@@ -184,20 +184,27 @@ pub const SyslogSender = struct {
         self.allocator.destroy(self);
     }
 
-    pub fn send(self: *SyslogSender, event: *const events.AuditEvent) !void {
-        if (!self.config.enabled) return;
+    /// Enqueue an event for the background worker. Returns `.dropped` when
+    /// the channel is full (the message is discarded and counted by
+    /// `dropped_count`), `.enqueued` otherwise (GAP-041/A2). Warn cadence
+    /// matches the file sink: first drop and every 1000th after.
+    pub fn send(self: *SyslogSender, event: *const events.AuditEvent) !events.SendStatus {
+        // A disabled sink accepts nothing and loses nothing.
+        if (!self.config.enabled) return .enqueued;
 
         const cef_msg = try cef.formatCef(self.allocator, event, &self.identity, self.clock);
         const syslog_line = try self.formatSyslogLine(event, cef_msg);
         defer self.allocator.free(cef_msg);
 
         if (!self.ch.trySend(syslog_line)) {
-            const prev = self.dropped_count.fetchAdd(1, .monotonic);
-            if (prev == 0) {
-                log.warn("syslog channel full; dropping message", .{});
-            }
             self.allocator.free(syslog_line);
+            const n = self.dropped_count.fetchAdd(1, .monotonic) + 1;
+            if (n == 1 or n % 1000 == 0) {
+                log.warn("syslog channel full; dropped {d} messages so far", .{n});
+            }
+            return .dropped;
         }
+        return .enqueued;
     }
 
     pub fn getDroppedCount(self: *SyslogSender) u64 {

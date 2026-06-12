@@ -6,6 +6,15 @@
 const std = @import("std");
 const json_util = @import("json_util.zig");
 
+/// Result of handing an event to a sink's bounded queue (GAP-041/A2).
+/// `enqueued` means the sink accepted the record for asynchronous
+/// delivery; `dropped` means the queue was full and the record was
+/// discarded (counted by the sink's drop counter). Lives here because
+/// both `file_sink.zig` and `syslog.zig` already import `events.zig`,
+/// keeping the import direction sink -> events with no sink-to-sink
+/// dependency.
+pub const SendStatus = enum { enqueued, dropped };
+
 pub const Severity = enum {
     DEBUG,
     INFO,

@@ -153,7 +153,9 @@ pub const AuditLogger = struct {
         // records by filtering for `audit.durable=false`.
         if (event.metadata != null and filtered_metadata == null) {
             if (self.file_sink) |sink| {
-                try sink.writeError("Event dropped due to unredactable sensitive content");
+                // This path already reports durable=false below, so the
+                // enqueue-vs-drop status of the marker itself adds nothing.
+                _ = try sink.writeError("Event dropped due to unredactable sensitive content");
             }
             span_ok = true;
             span_durable = false;
@@ -212,30 +214,37 @@ pub const AuditLogger = struct {
         // Fan out to sinks concurrently — both sinks use background workers
         // consuming from BoundedChannels, so these calls just format and enqueue.
         // Attempt both sinks independently so one failure doesn't block the other.
+        var any_dropped = false;
         var syslog_err: ?anyerror = null;
         if (self.syslog_sender) |sender| {
-            sender.send(&event) catch |err| {
+            if (sender.send(&event)) |status| {
+                if (status == .dropped) any_dropped = true;
+            } else |err| {
                 syslog_err = err;
-            };
+            }
         }
 
         var file_err: ?anyerror = null;
         if (self.file_sink) |sink| {
-            sink.write(&event, event.metadata) catch |err| {
+            if (sink.write(&event, event.metadata)) |status| {
+                if (status == .dropped) any_dropped = true;
+            } else |err| {
                 file_err = err;
-            };
+            }
         }
 
         // Propagate errors: prefer syslog error since it likely indicates OOM
         if (syslog_err) |err| return err;
         if (file_err) |err| return err;
 
-        // Success path: both sinks accepted the record (or were
-        // disabled), so the record is considered durable. The
-        // deferred `endAuditRecordSpan` reads these values when the
-        // function returns normally.
+        // Success path: the call itself succeeded (`span_ok`), but the
+        // record is only durable if every enabled sink actually ENQUEUED
+        // it — a channel-full drop is not an error, yet the record never
+        // reached a sink, so the span must say durable=false (GAP-041/A2,
+        // QR-005). The deferred `endAuditRecordSpan` reads these values
+        // when the function returns normally.
         span_ok = true;
-        span_durable = true;
+        span_durable = !any_dropped;
     }
 
     /// Estimate the serialized JSON size of an audit event without building a
@@ -474,6 +483,60 @@ test "audit logger basic functionality" {
 
     const event = makeTestEvent();
     try logger.audit(&event);
+}
+
+test "audit: succeeds without error when the file sink drops (GAP-041/QR-005)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var test_config = try config.loadTestConfig(allocator);
+    defer test_config.deinit();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+
+    // Worker-less file sink with a 1-slot channel, pre-filled so the next
+    // enqueue deterministically drops (nothing drains it).
+    const BoundedChannel = @import("channel.zig").BoundedChannel;
+    const sink = try allocator.create(file_sink.FileSink);
+    sink.* = .{
+        .allocator = allocator,
+        .config = .{
+            .enabled = true,
+            .path = "zig-out/tmp/test-gap041-logger/audit.log",
+            .max_bytes = 1024 * 1024,
+            .backup_count = 0,
+        },
+        .clock = fixed_clock.clock(),
+        .current_file = null,
+        .current_size = 0,
+        .writes_since_sync = 0,
+        .ch = try BoundedChannel([]const u8).init(allocator, 1),
+        .thread = null,
+        .dropped_count = .init(0),
+    };
+    defer sink.deinit();
+
+    const occupant = try allocator.dupe(u8, "occupant");
+    try std.testing.expect(sink.ch.trySend(occupant));
+
+    // Stack logger wired straight to the manual sink — its deinit is never
+    // called (config and sink are cleaned up by the defers above).
+    var logger_inst = AuditLogger{
+        .allocator = allocator,
+        .config = test_config,
+        .clock = fixed_clock.clock(),
+        .id_gen = fixed_id_gen.idGen(),
+        .syslog_sender = null,
+        .file_sink = sink,
+    };
+
+    const event = makeTestEvent();
+    // A full channel is a DROP, not an error: audit() must still succeed
+    // (the span ends durable=false, observable here via the drop counter).
+    try logger_inst.audit(&event);
+    try std.testing.expect(sink.getDroppedCount() > 0);
 }
 
 test "audit: non-object top-level metadata does not double-free (QR-002)" {

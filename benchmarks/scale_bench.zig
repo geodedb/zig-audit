@@ -230,7 +230,7 @@ fn benchFileSink(allocator: std.mem.Allocator, iterations: usize) f64 {
     const timer_start: u64 = nowNs();
 
     for (0..iterations) |_| {
-        sink.write(&event, null) catch {};
+        _ = sink.write(&event, null) catch .dropped;
     }
 
     const elapsed = nowNs() - timer_start;

@@ -70,6 +70,7 @@ else
 // ── Convenience re-exports ──────────────────────────────────────────────
 
 pub const AuditEvent = events.AuditEvent;
+pub const SendStatus = events.SendStatus;
 pub const AuditLogger = logger.AuditLogger;
 pub const Config = config.Config;
 pub const FileSink = file_sink.FileSink;
