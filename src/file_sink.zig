@@ -319,13 +319,29 @@ pub const FileSink = struct {
             try cwd.createDirPath(io, dir_path);
         }
 
-        self.current_file = try cwd.createFile(io, self.config.path, .{ .truncate = false });
+        // GAP-063: apply the restrictive mode AT creation via
+        // CreateFileOptions.permissions so a freshly created file never
+        // exists with broader permissions (the old create-then-chmod
+        // sequence left a umask-dependent window). umask can only remove
+        // bits from the creation mode, never add them.
+        self.current_file = try cwd.createFile(io, self.config.path, .{
+            .truncate = false,
+            .permissions = if (builtin.os.tag == .windows)
+                .default_file
+            else
+                std.Io.File.Permissions.fromMode(0o640),
+        });
 
         if (self.current_file) |file| {
             const stat = try file.stat(io);
             self.current_size = stat.size;
 
             if (builtin.os.tag != .windows) {
+                // Normalize to exactly 0o640: covers pre-existing files
+                // (creation permissions are ignored when the file already
+                // exists) and umask-subtracted bits on fresh files. Safe
+                // post-hoc now — the creation mode above is already
+                // restrictive, so there is no permissive window.
                 try file.setPermissions(io, std.Io.File.Permissions.fromMode(0o640));
             }
         }
@@ -516,6 +532,40 @@ test "FileSink sync_mode periodic writes to file" {
         if (line.len > 0) line_count += 1;
     }
     try testing.expectEqual(@as(u32, 6), line_count);
+}
+
+test "GAP-063: fresh audit file has mode 0o640" {
+    if (builtin.os.tag == .windows) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
+    const test_dir = "zig-out/tmp/test-gap063-mode";
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/audit.log",
+        .max_bytes = 1024,
+        .backup_count = 0,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+    defer sink.deinit();
+
+    // The restrictive mode is applied AT creation (no umask-window race
+    // between createFile and a later setPermissions), so the file must
+    // already be exactly 0o640 the moment init returns.
+    const file = try cwd.openFile(io, file_config.path, .{});
+    defer file.close(io);
+    const stat = try file.stat(io);
+    try testing.expectEqual(@as(std.posix.mode_t, 0o640), stat.permissions.toMode() & 0o777);
 }
 
 test "GAP-043: path with a '..' component is rejected" {
