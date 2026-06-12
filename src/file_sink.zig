@@ -8,7 +8,6 @@ const std = @import("std");
 const builtin = @import("builtin");
 const events = @import("events.zig");
 const config = @import("config.zig");
-const json_util = @import("json_util.zig");
 const time = @import("time.zig");
 const BoundedChannel = @import("channel.zig").BoundedChannel;
 const log = std.log.scoped(.audit);
@@ -125,16 +124,23 @@ pub const FileSink = struct {
         var ts_buf: [64]u8 = undefined;
         const timestamp = self.clock.nowRfc3339(&ts_buf);
 
-        var obj: std.json.ObjectMap = .empty;
-        defer obj.deinit(self.allocator);
-        try obj.put(self.allocator, "ts", std.json.Value{ .string = timestamp });
-        try obj.put(self.allocator, "level", std.json.Value{ .string = "ERROR" });
-        try obj.put(self.allocator, "msg", std.json.Value{ .string = error_msg });
-        const json = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
+        // GAP-057: stream the JSON directly — no intermediate ObjectMap.
+        var aw: std.Io.Writer.Allocating = try .initCapacity(self.allocator, 128);
+        defer aw.deinit();
+
+        var js: std.json.Stringify = .{ .writer = &aw.writer };
+        try js.beginObject();
+        try js.objectField("ts");
+        try js.write(timestamp);
+        try js.objectField("level");
+        try js.write("ERROR");
+        try js.objectField("msg");
+        try js.write(error_msg);
+        try js.endObject();
         // PR-006a: the enqueued line owns its trailing newline so the worker
         // issues exactly one write per record.
-        const error_line = try self.allocator.realloc(json, json.len + 1);
-        error_line[error_line.len - 1] = '\n';
+        try aw.writer.writeByte('\n');
+        const error_line = try aw.toOwnedSlice();
 
         return self.enqueueLine(error_line, "error messages");
     }
@@ -275,28 +281,26 @@ pub const FileSink = struct {
         }
     }
 
-    /// Insert a string field into a JSON object, duplicating both the key and value.
-    /// This reduces repetition in formatJsonLine where every field follows the
-    /// same `try obj.put(try dupe(key), .{ .string = try dupe(value) })` pattern.
-    fn putField(self: *FileSink, obj: *std.json.ObjectMap, key: []const u8, value: []const u8) !void {
-        try obj.put(
-            self.allocator,
-            try self.allocator.dupe(u8, key),
-            std.json.Value{ .string = try self.allocator.dupe(u8, value) },
-        );
+    /// Emit one fixed string field into the stream — unless the metadata
+    /// object also defines the key, in which case the fixed field is skipped
+    /// entirely (metadata wins; preserves the old ObjectMap path's
+    /// fetchSwapRemove semantics without ever materializing the map).
+    fn streamFixedField(js: *std.json.Stringify, metadata: ?std.json.Value, key: []const u8, value: []const u8) !void {
+        if (metadata) |m| {
+            if (m == .object and m.object.contains(key)) return;
+        }
+        try js.objectField(key);
+        try js.write(value);
     }
 
+    /// Serialize the event straight into an allocating writer (GAP-057,
+    /// GAP-055, GAP-053, PR-001, NEW-PERF-005): no intermediate ObjectMap,
+    /// no per-event constant-key dupes, no extra metadata deep-copy, and a
+    /// single serialize pass. `std.json.Stringify.write` renders
+    /// `std.json.Value` natively via its `jsonStringify` decl, so metadata
+    /// subtrees stream without cloning. Returns the line WITH its trailing
+    /// newline (PR-006a), owned by the caller.
     fn formatJsonLine(self: *FileSink, event: *const events.AuditEvent, filtered_metadata: ?std.json.Value) ![]const u8 {
-        var json_obj: std.json.ObjectMap = .empty;
-        defer {
-            var iter = json_obj.iterator();
-            while (iter.next()) |entry| {
-                self.allocator.free(entry.key_ptr.*);
-                json_util.freeJsonValue(self.allocator, entry.value_ptr.*);
-            }
-            json_obj.deinit(self.allocator);
-        }
-
         // GAP-046/A7: the event's own timestamp is authoritative — audit()
         // stamps ts_unix_ms before fan-out. The clock fallback only covers
         // direct public-formatter calls with unstamped (ts == 0) events.
@@ -305,61 +309,61 @@ pub const FileSink = struct {
             time.formatRfc3339(event.ts_unix_ms, &ts_buf)
         else
             self.clock.nowRfc3339(&ts_buf);
-        try self.putField(&json_obj, "ts", timestamp);
 
-        try self.putField(&json_obj, "category", event.category);
-        try self.putField(&json_obj, "action", event.action);
-        try self.putField(&json_obj, "outcome", event.outcome.toString());
-        try self.putField(&json_obj, "severity", @tagName(event.severity));
-        try self.putField(&json_obj, "actor_id", event.actor_id);
+        // GAP-053: seed the buffer near a typical line size so the common
+        // case avoids repeated early regrowth.
+        var aw: std.Io.Writer.Allocating = try .initCapacity(self.allocator, 256);
+        defer aw.deinit();
+
+        var js: std.json.Stringify = .{ .writer = &aw.writer };
+        try js.beginObject();
+
+        try streamFixedField(&js, filtered_metadata, "ts", timestamp);
+        try streamFixedField(&js, filtered_metadata, "category", event.category);
+        try streamFixedField(&js, filtered_metadata, "action", event.action);
+        try streamFixedField(&js, filtered_metadata, "outcome", event.outcome.toString());
+        try streamFixedField(&js, filtered_metadata, "severity", @tagName(event.severity));
+        try streamFixedField(&js, filtered_metadata, "actor_id", event.actor_id);
 
         if (event.subject_id) |subject_id| {
-            try self.putField(&json_obj, "subject_id", subject_id);
+            try streamFixedField(&js, filtered_metadata, "subject_id", subject_id);
         }
 
         if (event.request_id) |request_id| {
-            try self.putField(&json_obj, "request_id", request_id);
+            try streamFixedField(&js, filtered_metadata, "request_id", request_id);
         }
 
         if (event.session_id) |session_id| {
-            try self.putField(&json_obj, "session_id", session_id);
+            try streamFixedField(&js, filtered_metadata, "session_id", session_id);
         }
 
         if (event.source_ip) |source_ip| {
-            try self.putField(&json_obj, "source_ip", source_ip);
+            try streamFixedField(&js, filtered_metadata, "source_ip", source_ip);
         }
 
         if (event.trace_id) |trace_id| {
-            try self.putField(&json_obj, "trace_id", &trace_id);
+            try streamFixedField(&js, filtered_metadata, "trace_id", &trace_id);
         }
 
         if (event.span_id) |span_id| {
-            try self.putField(&json_obj, "span_id", &span_id);
+            try streamFixedField(&js, filtered_metadata, "span_id", &span_id);
         }
 
         if (filtered_metadata) |metadata| {
             if (metadata == .object) {
                 var iter = metadata.object.iterator();
                 while (iter.next()) |entry| {
-                    // Free any existing entry with the same key to avoid leaks
-                    if (json_obj.fetchSwapRemove(entry.key_ptr.*)) |removed| {
-                        self.allocator.free(removed.key);
-                        json_util.freeJsonValue(self.allocator, removed.value);
-                    }
-                    const key = try self.allocator.dupe(u8, entry.key_ptr.*);
-                    const value = try json_util.cloneJsonValue(self.allocator, entry.value_ptr.*);
-                    try json_obj.put(self.allocator, key, value);
+                    try js.objectField(entry.key_ptr.*);
+                    try js.write(entry.value_ptr.*);
                 }
             }
         }
 
-        const json_value = std.json.Value{ .object = json_obj };
-        const json = try std.json.Stringify.valueAlloc(self.allocator, json_value, .{});
+        try js.endObject();
         // PR-006a: the line owns its trailing newline so the worker issues
         // exactly one write per record.
-        const line = try self.allocator.realloc(json, json.len + 1);
-        line[line.len - 1] = '\n';
-        return line;
+        try aw.writer.writeByte('\n');
+        return aw.toOwnedSlice();
     }
 
     fn checkRotation(self: *FileSink, additional_size: usize) !void {
@@ -696,6 +700,142 @@ test "GAP-046/A7: formatJsonLine falls back to the clock for unstamped events" {
     defer allocator.free(line);
 
     try testing.expect(std.mem.indexOf(u8, line, "\"ts\":\"2025-01-01T00:00:00.000Z\"") != null);
+}
+
+test "GAP-057 characterization: formatJsonLine full event + colliding metadata (parsed equality)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+
+    var sink = try FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap057-char/audit.log",
+        .max_bytes = 1024 * 1024,
+        .backup_count = 0,
+    }, fixed_clock.clock());
+    defer sink.ch.deinit();
+
+    // Metadata: includes "category", which COLLIDES with a fixed event
+    // field — metadata wins (pinned semantics) — plus every Value variant:
+    // string, integer, float, bool, null, nested object, and array.
+    var nested: std.json.ObjectMap = .empty;
+    defer nested.deinit(allocator);
+    try nested.put(allocator, "k", .{ .string = "v" });
+    try nested.put(allocator, "n", .{ .integer = 7 });
+
+    var list = std.json.Array.init(allocator);
+    defer list.deinit();
+    try list.append(.{ .integer = 1 });
+    try list.append(.{ .string = "two" });
+    try list.append(.{ .bool = false });
+
+    var meta: std.json.ObjectMap = .empty;
+    defer meta.deinit(allocator);
+    try meta.put(allocator, "category", .{ .string = "metadata-wins" });
+    try meta.put(allocator, "extra", .{ .string = "extra-value" });
+    try meta.put(allocator, "count", .{ .integer = 3 });
+    try meta.put(allocator, "ratio", .{ .float = 1.5 });
+    try meta.put(allocator, "ok", .{ .bool = true });
+    try meta.put(allocator, "nothing", .null);
+    try meta.put(allocator, "nested", .{ .object = nested });
+    try meta.put(allocator, "list", .{ .array = list });
+
+    const event = events.AuditEvent{
+        .category = "fixed-category",
+        .action = "char\"acter\\ization", // exercises JSON string escaping
+        .outcome = .failure,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS + 5000,
+        .severity = .WARN,
+        .actor_id = "alice",
+        .subject_id = "subject-9",
+        .request_id = "req-42",
+        .session_id = "sess-7",
+        .source_ip = "203.0.113.5",
+        .trace_id = "abcdef0123456789abcdef0123456789".*,
+        .span_id = "0123456789abcdef".*,
+        .metadata = null,
+    };
+
+    const line = try sink.formatJsonLine(&event, .{ .object = meta });
+    defer allocator.free(line);
+
+    // One newline, at the very end (PR-006a shape).
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, line, "\n"));
+    try testing.expect(line[line.len - 1] == '\n');
+
+    // Parsed equality, not string equality: key order may legally change.
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+
+    // 12 fixed fields + 8 metadata entries - 1 collision = 19 keys exactly.
+    try testing.expectEqual(@as(usize, 19), obj.count());
+
+    try testing.expectEqualStrings("2025-01-01T00:00:05.000Z", obj.get("ts").?.string);
+    // Collision: metadata wins over the fixed event field.
+    try testing.expectEqualStrings("metadata-wins", obj.get("category").?.string);
+    try testing.expectEqualStrings("char\"acter\\ization", obj.get("action").?.string);
+    try testing.expectEqualStrings("failure", obj.get("outcome").?.string);
+    try testing.expectEqualStrings("WARN", obj.get("severity").?.string);
+    try testing.expectEqualStrings("alice", obj.get("actor_id").?.string);
+    try testing.expectEqualStrings("subject-9", obj.get("subject_id").?.string);
+    try testing.expectEqualStrings("req-42", obj.get("request_id").?.string);
+    try testing.expectEqualStrings("sess-7", obj.get("session_id").?.string);
+    try testing.expectEqualStrings("203.0.113.5", obj.get("source_ip").?.string);
+    try testing.expectEqualStrings("abcdef0123456789abcdef0123456789", obj.get("trace_id").?.string);
+    try testing.expectEqualStrings("0123456789abcdef", obj.get("span_id").?.string);
+
+    try testing.expectEqualStrings("extra-value", obj.get("extra").?.string);
+    try testing.expectEqual(@as(i64, 3), obj.get("count").?.integer);
+    try testing.expectEqual(@as(f64, 1.5), obj.get("ratio").?.float);
+    try testing.expect(obj.get("ok").?.bool);
+    try testing.expect(obj.get("nothing").? == .null);
+
+    const nested_out = obj.get("nested").?.object;
+    try testing.expectEqual(@as(usize, 2), nested_out.count());
+    try testing.expectEqualStrings("v", nested_out.get("k").?.string);
+    try testing.expectEqual(@as(i64, 7), nested_out.get("n").?.integer);
+
+    const list_out = obj.get("list").?.array;
+    try testing.expectEqual(@as(usize, 3), list_out.items.len);
+    try testing.expectEqual(@as(i64, 1), list_out.items[0].integer);
+    try testing.expectEqualStrings("two", list_out.items[1].string);
+    try testing.expect(list_out.items[2].bool == false);
+}
+
+test "GAP-057 characterization: writeError line shape (parsed equality)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+
+    var sink = try FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap057-err/audit.log",
+        .max_bytes = 1024 * 1024,
+        .backup_count = 0,
+    }, fixed_clock.clock());
+    defer {
+        while (sink.ch.tryReceive()) |msg| allocator.free(msg);
+        sink.ch.deinit();
+    }
+
+    try testing.expectEqual(events.SendStatus.enqueued, try sink.writeError("disk \"full\""));
+    const line = sink.ch.tryReceive().?;
+    defer allocator.free(line);
+
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, line, "\n"));
+    try testing.expect(line[line.len - 1] == '\n');
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, line, .{});
+    defer parsed.deinit();
+    const obj = parsed.value.object;
+
+    try testing.expectEqual(@as(usize, 3), obj.count());
+    try testing.expectEqualStrings("2025-01-01T00:00:00.000Z", obj.get("ts").?.string);
+    try testing.expectEqualStrings("ERROR", obj.get("level").?.string);
+    try testing.expectEqualStrings("disk \"full\"", obj.get("msg").?.string);
 }
 
 test "FileSink sync_mode per_event is default" {
