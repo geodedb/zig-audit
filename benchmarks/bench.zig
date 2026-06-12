@@ -323,7 +323,7 @@ fn benchLoggerAudit(allocator: std.mem.Allocator) BenchResult {
     };
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const logger_inst = AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen()) catch
         return BenchResult{ .name = "logger audit()", .count = 0, .total_ns = 0 };

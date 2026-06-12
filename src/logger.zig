@@ -383,7 +383,7 @@ test "estimateEventSize: small event stays under 8192" {
 
     const test_config = try config.loadTestConfig(allocator);
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const logger_inst = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer logger_inst.deinit();
@@ -416,7 +416,7 @@ test "estimateEventSize: large metadata exceeds 8192" {
 
     const test_config = try config.loadTestConfig(allocator);
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const logger_inst = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer logger_inst.deinit();
@@ -479,7 +479,7 @@ test "audit logger basic functionality" {
     // Logger takes ownership of config and frees it in deinit
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const logger = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer logger.deinit();
@@ -497,7 +497,7 @@ test "audit: succeeds without error when the file sink drops (GAP-041/QR-005)" {
     defer test_config.deinit();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     // Worker-less file sink with a 1-slot channel, pre-filled so the next
     // enqueue deterministically drops (nothing drains it). Construction is
@@ -540,7 +540,7 @@ test "audit: non-object top-level metadata does not double-free (QR-002)" {
 
     const test_config = try config.loadTestConfig(allocator);
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const logger = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer logger.deinit();
@@ -557,7 +557,7 @@ test "audit: oversized metadata truncation markers are heap-owned (QR-003)" {
 
     const test_config = try config.loadTestConfig(allocator);
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const logger = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
     defer logger.deinit();

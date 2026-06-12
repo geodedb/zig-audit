@@ -81,7 +81,6 @@ pub fn main() !void {
     var fixed_id_gen = audit.time.FixedIdGen.init(
         audit.time.TEST_TRACE_ID,
         audit.time.TEST_SPAN_ID,
-        audit.time.TEST_REQUEST_ID,
     );
 
     // -- 4. Build the AuditLogger -------------------------------------------

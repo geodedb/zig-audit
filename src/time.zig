@@ -124,8 +124,6 @@ pub const IdGen = struct {
     const VTable = struct {
         traceId: *const fn (ptr: *anyopaque, buf: *[32]u8) void,
         spanId: *const fn (ptr: *anyopaque, buf: *[16]u8) void,
-        /// Note: returns empty string on allocation failure.
-        requestId: *const fn (ptr: *anyopaque, allocator: std.mem.Allocator) []const u8,
     };
 
     pub fn traceId(self: IdGen, buf: *[32]u8) void {
@@ -135,11 +133,6 @@ pub const IdGen = struct {
     pub fn spanId(self: IdGen, buf: *[16]u8) void {
         return self.vtable.spanId(self.context, buf);
     }
-
-    /// Generate a request ID string. Note: returns empty string on allocation failure.
-    pub fn requestId(self: IdGen, allocator: std.mem.Allocator) []const u8 {
-        return self.vtable.requestId(self.context, allocator);
-    }
 };
 
 pub const SystemIdGen = struct {
@@ -148,7 +141,6 @@ pub const SystemIdGen = struct {
     const vtable = IdGen.VTable{
         .traceId = traceIdImpl,
         .spanId = spanIdImpl,
-        .requestId = requestIdImpl,
     };
 
     pub fn init() SystemIdGen {
@@ -181,30 +173,21 @@ pub const SystemIdGen = struct {
         self.rng.random().bytes(&bytes);
         buf.* = std.fmt.bytesToHex(bytes, .lower);
     }
-
-    fn requestIdImpl(ptr: *anyopaque, allocator: std.mem.Allocator) []const u8 {
-        const self: *SystemIdGen = @ptrCast(@alignCast(ptr));
-        const id = self.rng.random().int(u64);
-        return std.fmt.allocPrint(allocator, "req-{x}", .{id}) catch "";
-    }
 };
 
 pub const FixedIdGen = struct {
     trace_id: [32]u8,
     span_id: [16]u8,
-    request_id: []const u8,
 
     const vtable = IdGen.VTable{
         .traceId = traceIdImpl,
         .spanId = spanIdImpl,
-        .requestId = requestIdImpl,
     };
 
-    pub fn init(trace_id: [32]u8, span_id: [16]u8, request_id: []const u8) FixedIdGen {
+    pub fn init(trace_id: [32]u8, span_id: [16]u8) FixedIdGen {
         return FixedIdGen{
             .trace_id = trace_id,
             .span_id = span_id,
-            .request_id = request_id,
         };
     }
 
@@ -221,18 +204,12 @@ pub const FixedIdGen = struct {
         const self: *FixedIdGen = @ptrCast(@alignCast(ptr));
         @memcpy(buf, &self.span_id);
     }
-
-    fn requestIdImpl(ptr: *anyopaque, allocator: std.mem.Allocator) []const u8 {
-        const self: *FixedIdGen = @ptrCast(@alignCast(ptr));
-        return allocator.dupe(u8, self.request_id) catch "";
-    }
 };
 
 // Test timestamp for deterministic testing: 2025-01-01T00:00:00Z
 pub const TEST_TIMESTAMP_MS: i128 = 1735689600000;
 pub const TEST_TRACE_ID = "11111111111111111111111111111111".*;
 pub const TEST_SPAN_ID = "2222222222222222".*;
-pub const TEST_REQUEST_ID = "req-abc123";
 
 fn isHexString(s: []const u8) bool {
     for (s) |c| {
@@ -265,24 +242,11 @@ test "SystemIdGen produces valid 16-hex span IDs via vtable dispatch" {
     try std.testing.expectEqual(@as(usize, 16), buf.len);
 }
 
-test "SystemIdGen produces valid request IDs via vtable dispatch" {
-    var gen = SystemIdGen.init();
-    const id_gen = gen.idGen();
-
-    const req_id = id_gen.requestId(std.testing.allocator);
-    defer std.testing.allocator.free(req_id);
-
-    // Request IDs start with "req-"
-    try std.testing.expect(std.mem.startsWith(u8, req_id, "req-"));
-    try std.testing.expect(req_id.len > 4);
-}
-
 test "FixedIdGen returns exact values via vtable dispatch" {
     const trace = "aabbccdd11223344aabbccdd11223344".*;
     const span = "aabbccdd11223344".*;
-    const req = "req-fixed-test";
 
-    var gen = FixedIdGen.init(trace, span, req);
+    var gen = FixedIdGen.init(trace, span);
     const id_gen = gen.idGen();
 
     var trace_buf: [32]u8 = undefined;
@@ -292,10 +256,6 @@ test "FixedIdGen returns exact values via vtable dispatch" {
     var span_buf: [16]u8 = undefined;
     id_gen.spanId(&span_buf);
     try std.testing.expectEqualStrings(&span, &span_buf);
-
-    const req_id = id_gen.requestId(std.testing.allocator);
-    defer std.testing.allocator.free(req_id);
-    try std.testing.expectEqualStrings(req, req_id);
 }
 
 test "SystemIdGen produces different trace IDs on consecutive calls" {

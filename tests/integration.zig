@@ -28,7 +28,7 @@ test "integration: auth login success with exact syslog output" {
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const test_config = try config.loadTestConfig(allocator);
     // Logger takes ownership of config
@@ -77,7 +77,7 @@ test "integration: sensitive data redaction" {
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const test_config = try config.loadTestConfig(allocator);
 
@@ -135,7 +135,7 @@ test "integration: file rotation functionality" {
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
@@ -204,7 +204,7 @@ test "integration: default deny filtering" {
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const test_config = try config.loadTestConfig(allocator);
 
@@ -261,7 +261,7 @@ test "integration: fail closed behavior" {
     const allocator = gpa.allocator();
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
