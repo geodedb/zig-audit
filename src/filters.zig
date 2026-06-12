@@ -10,8 +10,19 @@ const json_util = @import("json_util.zig");
 
 pub const FilterResult = union(enum) {
     allow: void,
-    redact: ?RedactionToken, // token from isSensitiveKey; null for deny-pattern or value-only match
+    redact: Redaction,
     drop_event: void,
+
+    /// Carries both detection results out of `shouldFilterField` so the
+    /// redaction consumer never re-runs value-type detection (GAP-054).
+    pub const Redaction = struct {
+        /// Token from `isSensitiveKey`; null for deny-pattern, default-deny,
+        /// or value-only matches.
+        key_token: ?RedactionToken = null,
+        /// Detected type of the string value; null for non-string values or
+        /// values that match no detector.
+        value_token: ?RedactionToken = null,
+    };
 };
 
 pub const RedactionToken = enum {
@@ -350,19 +361,20 @@ fn filterAndRedactMetadataRecursive(
                         const processed_value = try redactValueRecursive(allocator, value, filters_cfg, depth + 1);
                         try filtered_map.put(allocator, try allocator.dupe(u8, key), processed_value);
                     },
-                    .redact => |key_token| {
+                    .redact => |redaction| {
                         // Determine the redacted string, applying masking when pii_mode == .mask.
-                        // key_token is the pre-resolved isSensitiveKey result from shouldFilterField,
-                        // avoiding a redundant second call.
+                        // Both tokens are pre-resolved by shouldFilterField (GAP-054):
+                        // key_token from isSensitiveKey, value_token from value-type
+                        // detection — no redundant second detection pass here.
                         const redacted_str = redact_blk: {
                             // First check if the value itself is a detectable type
                             if (value == .string) {
-                                if (detectValueType(value.string)) |detected| {
+                                if (redaction.value_token) |detected| {
                                     break :redact_blk try redactOrMaskValue(allocator, value.string, detected, filters_cfg);
                                 }
                             }
                             // Fall back to key-based redaction token (already resolved)
-                            if (key_token) |kt| {
+                            if (redaction.key_token) |kt| {
                                 // For key-based PII redaction with masking, check value
                                 if (filters_cfg.pii_mode == .mask and value == .string) {
                                     if (kt == .email and isEmail(value.string)) {
@@ -484,11 +496,22 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
 
     const sensitive_token = isSensitiveKey(allocator, key);
 
+    // GAP-054/PERF-014: run value-type detection at most once per field and
+    // hand the result to the redaction consumer via FilterResult, instead of
+    // the consumer re-detecting. The unfiltered pass runs eagerly only when
+    // some path below will need it: the pci_mode gate, or a key-driven
+    // redaction (denied / sensitive / default-deny) whose consumer redacts
+    // by detected value type first.
+    const key_redacts = is_denied or sensitive_token != null or (filters.default_deny and !is_allowed);
+    const value_token: ?RedactionToken = if (value == .string and (filters.pci_mode or key_redacts))
+        detectValueType(value.string)
+    else
+        null;
+
     // When pci_mode is true, enforce PAN/CVV detection regardless of allow_fields
     if (filters.pci_mode and value == .string) {
-        const detected = detectValueType(value.string);
-        if (detected == .card or detected == .cvv) {
-            return .{ .redact = sensitive_token };
+        if (value_token == .card or value_token == .cvv) {
+            return .{ .redact = .{ .key_token = sensitive_token, .value_token = value_token } };
         }
     }
 
@@ -507,17 +530,24 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
                 return .drop_event;
             }
         }
-        return .{ .redact = sensitive_token };
+        return .{ .redact = .{ .key_token = sensitive_token, .value_token = value_token } };
     }
 
     if (filters.default_deny and !is_allowed) {
-        return .{ .redact = sensitive_token };
+        return .{ .redact = .{ .key_token = sensitive_token, .value_token = value_token } };
     }
 
     if (value == .string) {
-        const detected_type = detectValueTypeFiltered(value.string, filters);
-        if (detected_type != null) {
-            return .{ .redact = sensitive_token };
+        const detected_type: ?RedactionToken = if (filters.pci_mode) blk: {
+            // pci_mode already ran the unfiltered pass above; apply the
+            // pii_mode gate that detectValueTypeFiltered would apply rather
+            // than scanning the value a second time.
+            const d = value_token orelse break :blk null;
+            if (filters.pii_mode == .off and (d == .email or d == .phone)) break :blk null;
+            break :blk d;
+        } else detectValueTypeFiltered(value.string, filters);
+        if (detected_type) |d| {
+            return .{ .redact = .{ .key_token = sensitive_token, .value_token = d } };
         }
     }
 

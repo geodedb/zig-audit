@@ -1244,3 +1244,54 @@ test "GAP-061: non-PEM value under a sensitive private-key key is redacted, not 
         try testing.expectEqualStrings("[REDACTED_PK]", value.string);
     }
 }
+
+test "GAP-054 pinning: PAN under sensitive key redacts to card token; email under denied key hashes" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &.{},
+        .deny_key_patterns = @constCast(&[_][]const u8{"internal"}),
+        .pii_mode = .hash,
+        .pci_mode = false,
+    };
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    // Sensitive key ("card_number" -> .card) holding a Luhn-valid PAN: the
+    // VALUE detection must win and produce the PAN token.
+    try metadata_obj.put(allocator, "card_number", std.json.Value{ .string = "4111111111111111" });
+    // Denied key (matches "internal", not sensitive) holding an email with
+    // pii_mode=.hash: the value detection must produce the sha256 pseudonym.
+    try metadata_obj.put(allocator, "internal_contact", std.json.Value{ .string = "user@example.com" });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit(allocator);
+        }
+    };
+
+    try testing.expect(filtered != null);
+    const obj = filtered.?.object;
+
+    try testing.expectEqualStrings("[REDACTED_PAN]", obj.get("card_number").?.string);
+
+    // Expected pseudonym: "sha256:" + first 16 hex chars of SHA-256(value).
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("user@example.com", &digest, .{});
+    const hex = std.fmt.bytesToHex(digest[0..8].*, .lower);
+    var expected_buf: [7 + 16]u8 = undefined;
+    const expected = try std.fmt.bufPrint(&expected_buf, "sha256:{s}", .{hex});
+    try testing.expectEqualStrings(expected, obj.get("internal_contact").?.string);
+}
