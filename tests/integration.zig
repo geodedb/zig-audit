@@ -79,10 +79,21 @@ test "integration: sensitive data redaction" {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
-    const test_config = try config.loadTestConfig(allocator);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
+    // Unique dir: other test binaries also write loadTestConfig's default
+    // path in parallel; an isolated dir keeps the read-back deterministic.
+    const test_dir = "zig-out/tmp/test-redaction";
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
+    const log_path = test_dir ++ "/audit.log";
+
+    var test_config = try config.loadTestConfig(allocator);
+    allocator.free(test_config.sinks.file.path);
+    test_config.sinks.file.path = try allocator.dupe(u8, log_path);
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
-    defer audit_logger.deinit();
 
     var metadata_obj: std.json.ObjectMap = .empty;
     defer metadata_obj.deinit(allocator);
@@ -111,22 +122,25 @@ test "integration: sensitive data redaction" {
 
     try audit_logger.audit(&event);
 
-    // Read the file sink output to verify redaction was applied
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const cwd = std.Io.Dir.cwd();
-    const content = cwd.readFileAlloc(io, test_config.sinks.file.path, allocator, .limited(8192)) catch return;
+    // The file sink is async (worker thread): content is only guaranteed on
+    // disk after deinit drains the queue. Read AFTER deinit, and fail loudly
+    // if nothing was written (QR-013) — the old soft guards silently passed
+    // on an empty/missing file.
+    audit_logger.deinit();
+
+    const content = try cwd.readFileAlloc(io, log_path, allocator, .limited(8192));
     defer allocator.free(content);
+    try testing.expect(content.len > 0);
 
-    if (content.len > 0) {
-        // Secrets must not appear in the output
-        try testing.expect(std.mem.indexOf(u8, content, "Sup3rSecret!") == null);
-        try testing.expect(std.mem.indexOf(u8, content, "4111 1111 1111 1111") == null);
+    // Secrets must not appear in the output
+    try testing.expect(std.mem.indexOf(u8, content, "Sup3rSecret!") == null);
+    try testing.expect(std.mem.indexOf(u8, content, "4111 1111 1111 1111") == null);
 
-        // Redaction tokens must appear
-        try testing.expect(std.mem.indexOf(u8, content, "[REDACTED]") != null or
-            std.mem.indexOf(u8, content, "[REDACTED_PAN]") != null or
-            std.mem.indexOf(u8, content, "[REDACTED_JWT]") != null);
-    }
+    // Redaction tokens must appear: password (sensitive key), card
+    // (detected PAN), jwt (sensitive key; value is not a parseable JWT)
+    try testing.expect(std.mem.indexOf(u8, content, "[REDACTED]") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "[REDACTED_PAN]") != null);
+    try testing.expect(std.mem.indexOf(u8, content, "[REDACTED_JWT]") != null);
 }
 
 test "integration: file rotation functionality" {
@@ -206,10 +220,20 @@ test "integration: default deny filtering" {
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
 
-    const test_config = try config.loadTestConfig(allocator);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+
+    // Unique dir: see "sensitive data redaction" above.
+    const test_dir = "zig-out/tmp/test-default-deny";
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
+    const log_path = test_dir ++ "/audit.log";
+
+    var test_config = try config.loadTestConfig(allocator);
+    allocator.free(test_config.sinks.file.path);
+    test_config.sinks.file.path = try allocator.dupe(u8, log_path);
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
-    defer audit_logger.deinit();
 
     var metadata_obj: std.json.ObjectMap = .empty;
     defer metadata_obj.deinit(allocator);
@@ -238,21 +262,21 @@ test "integration: default deny filtering" {
 
     try audit_logger.audit(&event);
 
-    // Read the file sink output to verify default-deny filtering
-    const io = std.Io.Threaded.global_single_threaded.io();
-    const cwd = std.Io.Dir.cwd();
-    const content = cwd.readFileAlloc(io, test_config.sinks.file.path, allocator, .limited(8192)) catch return;
-    defer allocator.free(content);
+    // Async file sink: read AFTER deinit drains, and fail loudly if nothing
+    // was written (QR-013).
+    audit_logger.deinit();
 
-    if (content.len > 0) {
-        // GAP-008: Fields not in allow_fields are now redacted (not dropped)
-        // under default_deny. The key "nickname" will appear but with a
-        // redacted value. The original value "loves pizza" must not leak.
-        try testing.expect(std.mem.indexOf(u8, content, "loves pizza") == null);
-        try testing.expect(std.mem.indexOf(u8, content, "jay") == null);
-        // actor_id is in allow_fields and should appear with its value
-        try testing.expect(std.mem.indexOf(u8, content, "jane.doe") != null);
-    }
+    const content = try cwd.readFileAlloc(io, log_path, allocator, .limited(8192));
+    defer allocator.free(content);
+    try testing.expect(content.len > 0);
+
+    // GAP-008: Fields not in allow_fields are now redacted (not dropped)
+    // under default_deny. The key "nickname" will appear but with a
+    // redacted value. The original value "loves pizza" must not leak.
+    try testing.expect(std.mem.indexOf(u8, content, "loves pizza") == null);
+    try testing.expect(std.mem.indexOf(u8, content, "jay") == null);
+    // actor_id is in allow_fields and should appear with its value
+    try testing.expect(std.mem.indexOf(u8, content, "jane.doe") != null);
 }
 
 test "integration: fail closed behavior" {
@@ -276,7 +300,6 @@ test "integration: fail closed behavior" {
     test_config.sinks.file.path = try allocator.dupe(u8, test_dir ++ "/audit.log");
 
     const audit_logger = try logger.AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
-    defer audit_logger.deinit();
 
     var metadata_obj: std.json.ObjectMap = .empty;
     defer metadata_obj.deinit(allocator);
@@ -303,13 +326,16 @@ test "integration: fail closed behavior" {
 
     try audit_logger.audit(&event);
 
-    const content = cwd.readFileAlloc(io, test_config.sinks.file.path, allocator, .limited(8192)) catch return;
-    defer allocator.free(content);
+    // Async file sink: read AFTER deinit drains, and fail loudly if nothing
+    // was written (QR-013).
+    audit_logger.deinit();
 
-    if (content.len > 0) {
-        // The private_key field should be redacted (value is not a valid PEM key,
-        // so it gets redacted rather than causing the event to be dropped)
-        try testing.expect(std.mem.indexOf(u8, content, "raw_key_bytes") == null);
-        try testing.expect(std.mem.indexOf(u8, content, "[REDACTED_PK]") != null);
-    }
+    const content = try cwd.readFileAlloc(io, test_dir ++ "/audit.log", allocator, .limited(8192));
+    defer allocator.free(content);
+    try testing.expect(content.len > 0);
+
+    // The private_key field should be redacted (value is not a valid PEM key,
+    // so it gets redacted rather than causing the event to be dropped)
+    try testing.expect(std.mem.indexOf(u8, content, "raw_key_bytes") == null);
+    try testing.expect(std.mem.indexOf(u8, content, "[REDACTED_PK]") != null);
 }
