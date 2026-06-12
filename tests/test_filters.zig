@@ -911,3 +911,36 @@ test "redaction tokens" {
     try testing.expectEqualStrings("[REDACTED_EMAIL]", filters.RedactionToken.email.toString());
     try testing.expectEqualStrings("[REDACTED_PHONE]", filters.RedactionToken.phone.toString());
 }
+
+test "filterAndRedactMetadata: non-object metadata is deep-copied, not aliased (QR-002)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const allow_fields = try allocator.alloc([]const u8, 0);
+    defer allocator.free(allow_fields);
+    const deny_patterns = try allocator.alloc([]const u8, 0);
+    defer allocator.free(deny_patterns);
+
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = allow_fields,
+        .deny_key_patterns = deny_patterns,
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    const original_str = try allocator.dupe(u8, "not-an-object");
+    const original = std.json.Value{ .string = original_str };
+
+    const filtered = try filters.filterAndRedactMetadata(allocator, original, &filter_config);
+    try testing.expect(filtered != null);
+    try testing.expect(filtered.? == .string);
+    // The returned value must be an independent copy, not an alias of the
+    // input -- audit() frees the original and the filtered value separately.
+    try testing.expect(filtered.?.string.ptr != original.string.ptr);
+
+    // Both must be independently freeable (double-free before the fix).
+    json_util.freeJsonValue(allocator, original);
+    json_util.freeJsonValue(allocator, filtered.?);
+}

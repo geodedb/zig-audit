@@ -369,7 +369,10 @@ fn filterAndRedactMetadataRecursive(
 
             break :blk std.json.Value{ .object = filtered_map };
         },
-        else => metadata,
+        // Deep-copy non-object metadata: the caller frees the original and
+        // the filtered result independently, so aliasing the input here
+        // caused a use-after-free + double-free (QR-002).
+        else => try json_util.cloneJsonValue(allocator, metadata),
     };
 }
 

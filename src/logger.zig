@@ -389,21 +389,9 @@ test "estimateEventSize: large metadata exceeds 8192" {
     try std.testing.expect(size > 8192);
 }
 
-test "audit logger basic functionality" {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    const test_config = try config.loadTestConfig(allocator);
-    // Logger takes ownership of config and frees it in deinit
-
-    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
-    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
-
-    const logger = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
-    defer logger.deinit();
-
-    const event = events.AuditEvent{
+/// Minimal valid event used by the end-to-end logger tests below.
+fn makeTestEvent() events.AuditEvent {
+    return events.AuditEvent{
         .category = "auth",
         .action = "login",
         .outcome = .success,
@@ -418,6 +406,39 @@ test "audit logger basic functionality" {
         .span_id = null,
         .metadata = null,
     };
+}
 
+test "audit logger basic functionality" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_config = try config.loadTestConfig(allocator);
+    // Logger takes ownership of config and frees it in deinit
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+
+    const logger = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+    defer logger.deinit();
+
+    const event = makeTestEvent();
+    try logger.audit(&event);
+}
+
+test "audit: non-object top-level metadata does not double-free (QR-002)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_config = try config.loadTestConfig(allocator);
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+
+    const logger = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+    defer logger.deinit();
+
+    var event = makeTestEvent();
+    event.metadata = std.json.Value{ .string = "not-an-object" };
     try logger.audit(&event);
 }
