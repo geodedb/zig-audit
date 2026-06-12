@@ -206,6 +206,14 @@ fn jsonInteger(obj: std.json.ObjectMap, key: []const u8) !i64 {
     return val.integer;
 }
 
+/// Safely extract an integer from a json value and range-check it into `T`,
+/// returning error.InvalidConfig if missing, wrong type, negative (for
+/// unsigned targets), or out of range for `T`.
+fn jsonIntegerInRange(comptime T: type, obj: std.json.ObjectMap, key: []const u8) !T {
+    const raw = try jsonInteger(obj, key);
+    return std.math.cast(T, raw) orelse error.InvalidConfig;
+}
+
 /// Safely extract a bool from a json value, returning error.InvalidConfig if missing or wrong type.
 fn jsonBool(obj: std.json.ObjectMap, key: []const u8) !bool {
     const val = obj.get(key) orelse return error.InvalidConfig;
@@ -233,7 +241,7 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
 
     const version_value = root_obj.get("version") orelse return error.MissingVersion;
     const ver = switch (version_value) {
-        .integer => |i| @as(u32, @intCast(i)),
+        .integer => |i| std.math.cast(u32, i) orelse return error.InvalidConfig,
         else => return error.InvalidVersion,
     };
     if (ver != 1) return error.UnsupportedVersion;
@@ -244,7 +252,7 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     const service = ServiceConfig{
         .name = try allocator.dupe(u8, try jsonString(service_obj, "name")),
         .host = try allocator.dupe(u8, try jsonString(service_obj, "host")),
-        .pid = @as(u32, @intCast(try jsonInteger(service_obj, "pid"))),
+        .pid = try jsonIntegerInRange(u32, service_obj, "pid"),
     };
 
     const identity_value = root_obj.get("identity") orelse return error.MissingIdentity;
@@ -272,16 +280,15 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     };
 
     const sync_interval: u32 = blk: {
-        const val = file_obj.get("sync_interval") orelse break :blk 100;
-        if (val != .integer) return error.InvalidConfig;
-        break :blk @as(u32, @intCast(val.integer));
+        if (file_obj.get("sync_interval") == null) break :blk 100;
+        break :blk try jsonIntegerInRange(u32, file_obj, "sync_interval");
     };
 
     const file_sink = FileSinkConfig{
         .enabled = try jsonBool(file_obj, "enabled"),
         .path = try allocator.dupe(u8, try jsonString(file_obj, "path")),
-        .max_bytes = @as(u64, @intCast(try jsonInteger(file_obj, "max_bytes"))),
-        .backup_count = @as(u32, @intCast(try jsonInteger(file_obj, "backup_count"))),
+        .max_bytes = try jsonIntegerInRange(u64, file_obj, "max_bytes"),
+        .backup_count = try jsonIntegerInRange(u32, file_obj, "backup_count"),
         .sync_mode = sync_mode,
         .sync_interval = sync_interval,
     };
@@ -289,11 +296,13 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     const syslog_obj = try jsonObject(sinks_obj, "syslog");
     const rfc5424_obj = try jsonObject(syslog_obj, "rfc5424");
     const facility_str = try jsonString(rfc5424_obj, "facility");
+    const port = try jsonIntegerInRange(u16, syslog_obj, "port");
+    if (port == 0) return error.InvalidConfig;
     const syslog_sink = SyslogSinkConfig{
         .enabled = try jsonBool(syslog_obj, "enabled"),
         .protocol = try SyslogProtocol.fromString(try jsonString(syslog_obj, "protocol")),
         .host = try allocator.dupe(u8, try jsonString(syslog_obj, "host")),
-        .port = @as(u16, @intCast(try jsonInteger(syslog_obj, "port"))),
+        .port = port,
         .rfc5424 = SyslogRfc5424Config{
             .facility = try SyslogFacility.fromString(facility_str),
         },
@@ -489,6 +498,63 @@ test "parseConfig parses sync_mode none" {
     try std.testing.expectEqual(SyncMode.none, cfg.sinks.file.sync_mode);
     // sync_interval defaults to 100 when not provided
     try std.testing.expectEqual(@as(u32, 100), cfg.sinks.file.sync_interval);
+}
+
+test "parseConfig rejects out-of-range integer fields (GAP-040/A1)" {
+    // parseConfig is not leak-safe on mid-parse errors (pre-existing: no
+    // errdefer on earlier dupes), so run the error cases under an arena.
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Template: every integer field is substitutable so each case can
+    // poison exactly one field while keeping the rest valid.
+    const template =
+        \\{{
+        \\  "version": {s},
+        \\  "service": {{"name": "svc", "host": "h", "pid": {s}}},
+        \\  "identity": {{"cef": {{"vendor": "V", "product": "P", "version": "1"}}}},
+        \\  "sinks": {{
+        \\    "file": {{"enabled": false, "path": "/tmp/a.log", "max_bytes": {s}, "backup_count": {s}, "sync_interval": {s}}},
+        \\    "syslog": {{"enabled": false, "protocol": "udp", "host": "localhost", "port": {s}, "rfc5424": {{"facility": "local0"}}}}
+        \\  }},
+        \\  "filters": {{"default_deny": false, "allow_fields": [], "deny_key_patterns": [], "pii_mode": "off", "pci_mode": false}}
+        \\}}
+    ;
+
+    const Case = struct {
+        version: []const u8 = "1",
+        pid: []const u8 = "1",
+        max_bytes: []const u8 = "1024",
+        backup_count: []const u8 = "1",
+        sync_interval: []const u8 = "100",
+        port: []const u8 = "514",
+    };
+
+    const cases = [_]Case{
+        .{ .version = "4294967296" }, // > u32 max
+        .{ .pid = "-5" }, // negative
+        .{ .pid = "4294967296" }, // > u32 max
+        .{ .max_bytes = "-1" }, // negative
+        .{ .backup_count = "-1" }, // negative
+        .{ .backup_count = "4294967296" }, // > u32 max
+        .{ .sync_interval = "-1" }, // negative
+        .{ .port = "99999" }, // > u16 max
+        .{ .port = "-1" }, // negative
+        .{ .port = "0" }, // port 0 is not a routable listener port
+    };
+
+    for (cases) |c| {
+        const json_str = try std.fmt.allocPrint(allocator, template, .{
+            c.version, c.pid, c.max_bytes, c.backup_count, c.sync_interval, c.port,
+        });
+        defer allocator.free(json_str);
+
+        var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+        defer parsed.deinit();
+
+        try std.testing.expectError(error.InvalidConfig, parseConfig(allocator, parsed.value));
+    }
 }
 
 /// Create a test configuration with sensible defaults.
