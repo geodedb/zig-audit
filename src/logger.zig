@@ -178,10 +178,31 @@ pub const AuditLogger = struct {
         if (estimated_size > 8192) {
             if (event.metadata) |metadata| {
                 json_util.freeJsonValue(self.allocator, metadata);
+                // Clear immediately: if building the truncation marker fails
+                // below, the deferred freeCloned must not free this again.
+                event.metadata = null;
             }
+            // Keys must be heap-duped: event.freeCloned ->
+            // json_util.freeJsonValue frees every object key, so string
+            // literals here would be invalid frees (QR-003).
             var truncation_obj: std.json.ObjectMap = .empty;
-            try truncation_obj.put(self.allocator, "_truncated", std.json.Value{ .bool = true });
-            try truncation_obj.put(self.allocator, "_original_size", std.json.Value{ .integer = @intCast(estimated_size) });
+            errdefer {
+                var trunc_iter = truncation_obj.iterator();
+                while (trunc_iter.next()) |entry| {
+                    self.allocator.free(entry.key_ptr.*);
+                }
+                truncation_obj.deinit(self.allocator);
+            }
+            {
+                const key = try self.allocator.dupe(u8, "_truncated");
+                errdefer self.allocator.free(key);
+                try truncation_obj.put(self.allocator, key, std.json.Value{ .bool = true });
+            }
+            {
+                const key = try self.allocator.dupe(u8, "_original_size");
+                errdefer self.allocator.free(key);
+                try truncation_obj.put(self.allocator, key, std.json.Value{ .integer = @intCast(estimated_size) });
+            }
             event.metadata = std.json.Value{ .object = truncation_obj };
         }
 
@@ -440,5 +461,35 @@ test "audit: non-object top-level metadata does not double-free (QR-002)" {
 
     var event = makeTestEvent();
     event.metadata = std.json.Value{ .string = "not-an-object" };
+    try logger.audit(&event);
+}
+
+test "audit: oversized metadata truncation markers are heap-owned (QR-003)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_config = try config.loadTestConfig(allocator);
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
+
+    const logger = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+    defer logger.deinit();
+
+    // Metadata serializing to >8192 bytes. loadTestConfig sets
+    // default_deny=true, so the key must be in allow_fields ("subject_id"
+    // is). The value is repeated 'x', which no value detector flags
+    // (not hex, PAN, JWT, email, phone, or CVV), so it survives redaction
+    // and triggers the truncation branch.
+    const big_value = try allocator.alloc(u8, 9000);
+    defer allocator.free(big_value);
+    @memset(big_value, 'x');
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "subject_id", std.json.Value{ .string = big_value });
+
+    var event = makeTestEvent();
+    event.metadata = std.json.Value{ .object = metadata_obj };
     try logger.audit(&event);
 }
