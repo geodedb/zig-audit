@@ -10,18 +10,36 @@
 const std = @import("std");
 const sync = @import("sync.zig");
 
+/// Fixed-capacity MPSC channel.
+///
+/// SINGLE-CONSUMER INVARIANT: exactly one thread may call `receive`/
+/// `tryReceive`. Both in-tree consumers (the syslog and file-sink workers)
+/// are single dedicated threads. The invariant is what makes the
+/// empty-transition signaling in `trySend` sufficient: with one consumer,
+/// it can only be blocked in `wait` after observing `count == 0` under the
+/// mutex, so only the 0 -> 1 insertion needs to signal (PR-010). `close()`
+/// still broadcasts so a blocked consumer always wakes for shutdown.
 pub fn BoundedChannel(comptime T: type) type {
     return struct {
         const Self = @This();
 
+        // Cold fields — written once at init.
         buf: []T,
-        head: usize,
+        allocator: std.mem.Allocator,
+
+        // Producer-side hot fields: every send locks the mutex and writes
+        // tail/count. Aligned to a cache-line boundary to keep them off the
+        // consumer cursor's line (PR-009 partial).
+        mutex: sync.Mutex align(std.atomic.cache_line),
         tail: usize,
         count: usize,
-        mutex: sync.Mutex,
         not_empty: sync.Condition,
         closed: bool,
-        allocator: std.mem.Allocator,
+
+        // Consumer-side cursor, isolated on its own cache line so the
+        // single consumer's head updates don't false-share with
+        // producer-side writes.
+        head: usize align(std.atomic.cache_line),
 
         pub fn init(allocator: std.mem.Allocator, capacity: usize) error{OutOfMemory}!Self {
             return Self{
@@ -51,9 +69,14 @@ pub fn BoundedChannel(comptime T: type) type {
 
             self.buf[self.tail] = item;
             self.tail = (self.tail + 1) % self.buf.len;
+            const was_empty = self.count == 0;
             self.count += 1;
 
-            self.not_empty.signal();
+            // PR-010: signal only on the empty -> non-empty transition.
+            // With the single-consumer invariant (see type doc), the
+            // consumer can only be waiting if it observed count == 0, so
+            // inserts at count > 0 never have a waiter to wake.
+            if (was_empty) self.not_empty.signal();
             return true;
         }
 

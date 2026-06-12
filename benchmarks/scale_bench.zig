@@ -66,6 +66,12 @@ const TierResult = struct {
     // Throughput metrics (higher is better)
     logger_ops_sec: f64,
     channel_ops_sec: f64,
+    // Multi-producer channel throughput (PR-013): P producers splitting the
+    // tier's event count into one draining consumer.
+    channel_mp1_ops_sec: f64 = 0,
+    channel_mp2_ops_sec: f64 = 0,
+    channel_mp4_ops_sec: f64 = 0,
+    channel_mp8_ops_sec: f64 = 0,
     // Latency metrics (lower is better)
     validate_ns: f64,
     clone_ns: f64,
@@ -271,6 +277,59 @@ fn benchChannel(allocator: std.mem.Allocator, iterations: usize) f64 {
     return count_f / (ns_f / 1_000_000_000.0);
 }
 
+/// Multi-producer channel throughput (PR-013): `producer_count` threads
+/// split a fixed `total` number of sends (remainder distributed to the
+/// first producers) into one consumer that drains exactly `total` items.
+/// Producers use trySend with yield-on-full so the send count is exact;
+/// no close() is needed because the consumer stops at the known total.
+fn benchChannelMultiProducer(allocator: std.mem.Allocator, total: usize, producer_count: usize) f64 {
+    var ch = BoundedChannel(u64).init(allocator, 4096) catch return 0;
+    defer ch.deinit();
+
+    const Producer = struct {
+        fn run(channel: *BoundedChannel(u64), n: usize) void {
+            for (0..n) |i| {
+                while (!channel.trySend(i)) {
+                    std.Thread.yield() catch {};
+                }
+            }
+        }
+    };
+
+    var threads: [8]std.Thread = undefined;
+    std.debug.assert(producer_count <= threads.len);
+    const base = total / producer_count;
+    const rem = total % producer_count;
+
+    const timer_start: u64 = nowNs();
+
+    var spawned: usize = 0;
+    var expected: usize = 0;
+    for (0..producer_count) |p| {
+        const n = base + @intFromBool(p < rem);
+        threads[p] = std.Thread.spawn(.{}, Producer.run, .{ &ch, n }) catch break;
+        spawned += 1;
+        expected += n;
+    }
+
+    // Single consumer: drain exactly the number of items the spawned
+    // producers will send, then stop (deterministic, no close needed).
+    var received: usize = 0;
+    while (received < expected) {
+        _ = ch.receive() orelse break;
+        received += 1;
+    }
+    const elapsed = nowNs() - timer_start;
+
+    for (threads[0..spawned]) |t| t.join();
+
+    if (received == 0) return 0;
+    const ns_f: f64 = @floatFromInt(elapsed);
+    const count_f: f64 = @floatFromInt(received);
+    if (ns_f == 0) return 0;
+    return count_f / (ns_f / 1_000_000_000.0);
+}
+
 fn benchLogger(allocator: std.mem.Allocator, iterations: usize) f64 {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
@@ -413,6 +472,14 @@ fn runTier(allocator: std.mem.Allocator, tier: Tier) TierResult {
     const channel_ops_sec = benchChannel(allocator, iters);
     if (checkTimeout(tier_start, tier)) |r| return r;
 
+    print("    channel multi-producer...\n", .{});
+    const mp_producer_counts = [_]usize{ 1, 2, 4, 8 };
+    var mp_ops: [mp_producer_counts.len]f64 = @splat(0);
+    for (mp_producer_counts, 0..) |p, idx| {
+        mp_ops[idx] = benchChannelMultiProducer(allocator, iters, p);
+        if (checkTimeout(tier_start, tier)) |r| return r;
+    }
+
     print("    logger...\n", .{});
     const logger_ops_sec = benchLogger(allocator, iters);
     if (checkTimeout(tier_start, tier)) |r| return r;
@@ -425,6 +492,10 @@ fn runTier(allocator: std.mem.Allocator, tier: Tier) TierResult {
         .event_count = @intCast(tier.event_count),
         .logger_ops_sec = logger_ops_sec,
         .channel_ops_sec = channel_ops_sec,
+        .channel_mp1_ops_sec = mp_ops[0],
+        .channel_mp2_ops_sec = mp_ops[1],
+        .channel_mp4_ops_sec = mp_ops[2],
+        .channel_mp8_ops_sec = mp_ops[3],
         .validate_ns = validate_ns,
         .clone_ns = clone_ns,
         .cef_format_ns = cef_format_ns,
@@ -526,6 +597,10 @@ fn writeJsonOutput(out: *StdoutWriter, results: []const TierResult) !void {
         }
         try out.writeFmt("      \"logger_ops_sec\": {d:.0},\n", .{r.logger_ops_sec});
         try out.writeFmt("      \"channel_ops_sec\": {d:.0},\n", .{r.channel_ops_sec});
+        try out.writeFmt("      \"channel_mp1_ops_sec\": {d:.0},\n", .{r.channel_mp1_ops_sec});
+        try out.writeFmt("      \"channel_mp2_ops_sec\": {d:.0},\n", .{r.channel_mp2_ops_sec});
+        try out.writeFmt("      \"channel_mp4_ops_sec\": {d:.0},\n", .{r.channel_mp4_ops_sec});
+        try out.writeFmt("      \"channel_mp8_ops_sec\": {d:.0},\n", .{r.channel_mp8_ops_sec});
         try out.writeFmt("      \"validate_ns\": {d:.1},\n", .{r.validate_ns});
         try out.writeFmt("      \"clone_ns\": {d:.1},\n", .{r.clone_ns});
         try out.writeFmt("      \"cef_format_ns\": {d:.1},\n", .{r.cef_format_ns});
