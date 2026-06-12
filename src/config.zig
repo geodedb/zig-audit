@@ -114,6 +114,11 @@ pub const FileSinkConfig = struct {
     /// symlink inside the base can still point outside it. Operators who
     /// need symlink-safe containment must guarantee the base directory
     /// tree contains no hostile symlinks.
+    ///
+    /// When null, `path` is trusted as-is (including absolute paths) — the
+    /// component-wise `..` check still applies. Set this to confine log
+    /// output below a base directory. Must not be the empty string
+    /// (`parseConfig` rejects "" with `error.InvalidConfig`).
     allowed_base_dir: ?[]const u8 = null,
 };
 
@@ -316,6 +321,10 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     const allowed_base_dir: ?[]const u8 = blk: {
         const val = file_obj.get("allowed_base_dir") orelse break :blk null;
         if (val != .string) return error.InvalidConfig;
+        // An empty jail is meaningless (it would lexically resolve to "."
+        // and reject every path) — almost certainly a config mistake, so
+        // fail loudly at parse time. Omit the key to disable the jail.
+        if (val.string.len == 0) return error.InvalidConfig;
         break :blk try allocator.dupe(u8, val.string);
     };
     errdefer if (allowed_base_dir) |base| allocator.free(base);
@@ -551,6 +560,26 @@ test "parseConfig parses optional allowed_base_dir (GAP-043/A4)" {
     defer cfg.deinit();
 
     try std.testing.expectEqualStrings("/var/log/audit", cfg.sinks.file.allowed_base_dir.?);
+}
+
+test "parseConfig rejects empty allowed_base_dir (GAP-043 review follow-up)" {
+    const allocator = std.testing.allocator;
+    const json_str =
+        \\{
+        \\  "version": 1,
+        \\  "service": {"name": "svc", "host": "h", "pid": 1},
+        \\  "identity": {"cef": {"vendor": "V", "product": "P", "version": "1"}},
+        \\  "sinks": {
+        \\    "file": {"enabled": false, "path": "/var/log/audit/a.log", "max_bytes": 1024, "backup_count": 1, "allowed_base_dir": ""},
+        \\    "syslog": {"enabled": false, "protocol": "udp", "host": "localhost", "port": 514, "rfc5424": {"facility": "local0"}}
+        \\  },
+        \\  "filters": {"default_deny": false, "allow_fields": [], "deny_key_patterns": [], "pii_mode": "off", "pci_mode": false}
+        \\}
+    ;
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, json_str, .{});
+    defer parsed.deinit();
+
+    try std.testing.expectError(error.InvalidConfig, parseConfig(allocator, parsed.value));
 }
 
 test "parseConfig defaults allowed_base_dir to null when absent (GAP-043/A4)" {

@@ -15,6 +15,11 @@ const log = std.log.scoped(.audit);
 
 const FILE_QUEUE_SIZE = 10000;
 
+/// One-time-per-process flag for the absolute-path-without-jail notice in
+/// `validatePath` (rotation re-validates, so without this the message would
+/// repeat on every rotation).
+var abs_path_no_jail_noticed = std.atomic.Value(bool).init(false);
+
 inline fn systemIo() std.Io {
     return std.Io.Threaded.global_single_threaded.io();
 }
@@ -307,6 +312,17 @@ pub const FileSink = struct {
             if (!isUnderBase(resolved_base, resolved_path)) {
                 return error.PathOutsideAllowedBase;
             }
+        } else if (std.fs.path.isAbsolute(self.config.path)) {
+            // Absolute log paths (e.g. /var/log/audit.log) with no jail are
+            // the normal operator deployment — config is operator-trusted by
+            // design. Note it once per process at info (not warn: this is
+            // not a fault) so the policy is visible without rotation noise.
+            if (!abs_path_no_jail_noticed.swap(true, .monotonic)) {
+                log.info(
+                    "file sink writes to absolute path '{s}' with no allowed_base_dir confinement configured",
+                    .{self.config.path},
+                );
+            }
         }
     }
 
@@ -315,12 +331,39 @@ pub const FileSink = struct {
     /// not enough — the next byte after the prefix must be a path separator
     /// so `/jail` does not admit `/jailbreak/x.log`.
     fn isUnderBase(base: []const u8, target: []const u8) bool {
+        // An empty base admits nothing (and must not read base[base.len-1]
+        // below). parseConfig rejects "" already; this guards hand-built
+        // configs and any future resolve() behavior change.
+        if (base.len == 0) return false;
         if (!std.mem.startsWith(u8, target, base)) return false;
         if (target.len == base.len) return true;
         // A resolved base never has a trailing separator except the
         // filesystem root itself ("/" or e.g. "C:\").
         if (std.fs.path.isSep(base[base.len - 1])) return true;
         return std.fs.path.isSep(target[base.len]);
+    }
+
+    /// Test-only helper: builds a worker-less FileSink (no thread, no open
+    /// file) with a 1-slot channel so drop/enqueue behavior is deterministic
+    /// (nothing drains the channel). `pub` only because logger.zig's drop
+    /// test constructs one across the file boundary — never use outside
+    /// tests. Centralizes the struct literal so future field additions
+    /// touch one place instead of every drop test.
+    pub fn testInitWorkerless(allocator: std.mem.Allocator, file_config: config.FileSinkConfig, clock: time.Clock) !FileSink {
+        comptime {
+            if (!builtin.is_test) @compileError("testInitWorkerless is a test-only helper");
+        }
+        return .{
+            .allocator = allocator,
+            .config = file_config,
+            .clock = clock,
+            .current_file = null,
+            .current_size = 0,
+            .writes_since_sync = 0,
+            .ch = try BoundedChannel([]const u8).init(allocator, 1),
+            .thread = null,
+            .dropped_count = .init(0),
+        };
     }
 
     fn openCurrentFile(self: *FileSink) !void {
@@ -377,7 +420,10 @@ test "file sink rotation" {
     const io = systemIo();
     const cwd = std.Io.Dir.cwd();
 
-    const test_dir = "zig-out/tmp/test-logs";
+    // Unique dir: tests/integration.zig uses zig-out/tmp/test-logs and the
+    // two test binaries run in parallel — sharing the dir races its
+    // deleteTree against this test's rotation (flaky missing .1 backup).
+    const test_dir = "zig-out/tmp/test-fs-rotation";
     cwd.createDirPath(io, test_dir) catch {};
     defer cwd.deleteTree(io, test_dir) catch {};
 
@@ -691,30 +737,86 @@ test "GAP-043: allowed_base_dir rejects prefix-only match (jail vs jailbreak)" {
     try testing.expectError(error.PathOutsideAllowedBase, FileSink.init(allocator, file_config, clock));
 }
 
+test "GAP-043: isUnderBase returns false for empty base" {
+    const testing = std.testing;
+    // Defensive guard: std.fs.path.resolve never returns "" today (it
+    // yields "." for empty input), but an empty base must never be
+    // treated as "everything is under it" — and must never read
+    // base[base.len - 1] out of bounds.
+    try testing.expect(!FileSink.isUnderBase("", "/var/log/audit.log"));
+    try testing.expect(!FileSink.isUnderBase("", "relative/x.log"));
+    try testing.expect(!FileSink.isUnderBase("", ""));
+}
+
+test "GAP-043: empty allowed_base_dir never admits any path" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap043-empty-base/x.log",
+        .max_bytes = 1024,
+        .backup_count = 0,
+        .allowed_base_dir = "",
+    };
+
+    // parseConfig rejects "" with error.InvalidConfig; a hand-built config
+    // that bypasses parsing must still fail closed at init.
+    try testing.expectError(error.PathOutsideAllowedBase, FileSink.init(allocator, file_config, clock));
+}
+
+test "GAP-043: absolute path with no allowed_base_dir is permitted (documented policy)" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
+    const test_dir = "zig-out/tmp/test-gap043-abs";
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    // Resolve the test path to a real ABSOLUTE path under zig-out/tmp.
+    const cwd_path = try std.process.currentPathAlloc(io, allocator);
+    defer allocator.free(cwd_path);
+    const abs_path = try std.fs.path.resolve(allocator, &.{ cwd_path, test_dir, "audit.log" });
+    defer allocator.free(abs_path);
+    try testing.expect(std.fs.path.isAbsolute(abs_path));
+
+    // Operator-trusted config: absolute log paths (e.g. /var/log/audit.log)
+    // are the normal deployment. With no jail configured, init must
+    // SUCCEED — this pins the documented policy (the sink emits a one-time
+    // info notice instead of refusing).
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = abs_path,
+        .max_bytes = 1024,
+        .backup_count = 0,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+    sink.deinit();
+}
+
 test "GAP-041: write returns .dropped and counts when channel is full" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
 
-    // Test-only construction: no worker thread and no file, so the 1-slot
-    // channel stays full deterministically (nothing drains it).
-    var sink = FileSink{
-        .allocator = allocator,
-        .config = .{
-            .enabled = true,
-            .path = "zig-out/tmp/test-gap041-drop/audit.log",
-            .max_bytes = 1024 * 1024,
-            .backup_count = 0,
-        },
-        .clock = fixed_clock.clock(),
-        .current_file = null,
-        .current_size = 0,
-        .writes_since_sync = 0,
-        .ch = try BoundedChannel([]const u8).init(allocator, 1),
-        .thread = null,
-        .dropped_count = .init(0),
-    };
+    // Worker-less construction: the 1-slot channel stays full
+    // deterministically (nothing drains it).
+    var sink = try FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap041-drop/audit.log",
+        .max_bytes = 1024 * 1024,
+        .backup_count = 0,
+    }, fixed_clock.clock());
     defer {
         while (sink.ch.tryReceive()) |msg| {
             allocator.free(msg);
@@ -758,22 +860,12 @@ test "GAP-041: write returns .enqueued when the channel has room" {
 
     var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
 
-    var sink = FileSink{
-        .allocator = allocator,
-        .config = .{
-            .enabled = true,
-            .path = "zig-out/tmp/test-gap041-enq/audit.log",
-            .max_bytes = 1024 * 1024,
-            .backup_count = 0,
-        },
-        .clock = fixed_clock.clock(),
-        .current_file = null,
-        .current_size = 0,
-        .writes_since_sync = 0,
-        .ch = try BoundedChannel([]const u8).init(allocator, 1),
-        .thread = null,
-        .dropped_count = .init(0),
-    };
+    var sink = try FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap041-enq/audit.log",
+        .max_bytes = 1024 * 1024,
+        .backup_count = 0,
+    }, fixed_clock.clock());
     defer {
         while (sink.ch.tryReceive()) |msg| {
             allocator.free(msg);

@@ -500,25 +500,16 @@ test "audit: succeeds without error when the file sink drops (GAP-041/QR-005)" {
     var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID, time.TEST_REQUEST_ID);
 
     // Worker-less file sink with a 1-slot channel, pre-filled so the next
-    // enqueue deterministically drops (nothing drains it).
-    const BoundedChannel = @import("channel.zig").BoundedChannel;
+    // enqueue deterministically drops (nothing drains it). Construction is
+    // centralized in the test-only helper so field additions touch one place.
     const sink = try allocator.create(file_sink.FileSink);
-    sink.* = .{
-        .allocator = allocator,
-        .config = .{
-            .enabled = true,
-            .path = "zig-out/tmp/test-gap041-logger/audit.log",
-            .max_bytes = 1024 * 1024,
-            .backup_count = 0,
-        },
-        .clock = fixed_clock.clock(),
-        .current_file = null,
-        .current_size = 0,
-        .writes_since_sync = 0,
-        .ch = try BoundedChannel([]const u8).init(allocator, 1),
-        .thread = null,
-        .dropped_count = .init(0),
-    };
+    errdefer allocator.destroy(sink);
+    sink.* = try file_sink.FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = "zig-out/tmp/test-gap041-logger/audit.log",
+        .max_bytes = 1024 * 1024,
+        .backup_count = 0,
+    }, fixed_clock.clock());
     defer sink.deinit();
 
     const occupant = try allocator.dupe(u8, "occupant");
