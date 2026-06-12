@@ -10,11 +10,34 @@ const events = @import("events.zig");
 const config = @import("config.zig");
 const time = @import("time.zig");
 
+/// Format an audit event as a CEF message, formatting the RFC 3339
+/// timestamp internally. Thin wrapper over `formatCefWithTimestamp` for
+/// standalone callers; `SyslogSender.send` formats the timestamp once and
+/// shares it with the RFC 5424 header instead (PR-008).
 pub fn formatCef(
     allocator: std.mem.Allocator,
     event: *const events.AuditEvent,
     identity: *const config.CefIdentityConfig,
     clock: time.Clock,
+) ![]const u8 {
+    // Timestamp — GAP-046/A7: the event's own timestamp is authoritative
+    // (audit() stamps ts_unix_ms before fan-out); the clock fallback only
+    // covers direct calls with unstamped (ts == 0) events.
+    var ts_buf: [64]u8 = undefined;
+    const ts_str = if (event.ts_unix_ms != 0)
+        time.formatRfc3339(event.ts_unix_ms, &ts_buf)
+    else
+        clock.nowRfc3339(&ts_buf);
+    return formatCefWithTimestamp(allocator, event, identity, ts_str);
+}
+
+/// Format an audit event as a CEF message using a pre-formatted RFC 3339
+/// timestamp (rendered into the `rt=` extension verbatim).
+pub fn formatCefWithTimestamp(
+    allocator: std.mem.Allocator,
+    event: *const events.AuditEvent,
+    identity: *const config.CefIdentityConfig,
+    timestamp: []const u8,
 ) ![]const u8 {
     // CEF:0|vendor|product|version|signature_id|name|severity|extension
     const signature_id = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ event.category, event.action });
@@ -26,15 +49,7 @@ pub fn formatCef(
     var extension = try std.ArrayList(u8).initCapacity(allocator, 256);
     defer extension.deinit(allocator);
 
-    // Timestamp — GAP-046/A7: the event's own timestamp is authoritative
-    // (audit() stamps ts_unix_ms before fan-out); the clock fallback only
-    // covers direct calls with unstamped (ts == 0) events.
-    var ts_buf: [64]u8 = undefined;
-    const ts_str = if (event.ts_unix_ms != 0)
-        time.formatRfc3339(event.ts_unix_ms, &ts_buf)
-    else
-        clock.nowRfc3339(&ts_buf);
-    try extension.print(allocator, "rt={s}", .{ts_str});
+    try extension.print(allocator, "rt={s}", .{timestamp});
 
     // Core fields
     const escaped_action = try escapeValue(allocator, event.action);
@@ -42,9 +57,11 @@ pub fn formatCef(
     try extension.print(allocator, " act={s}", .{escaped_action});
     try extension.print(allocator, " outcome={s}", .{event.outcome.toString()});
 
+    // GAP-052: actor_id is rendered twice (suser + cs1) but escaped once.
+    const escaped_actor = try escapeValue(allocator, event.actor_id);
+    defer allocator.free(escaped_actor);
+
     if (event.actor_id.len > 0) {
-        const escaped_actor = try escapeValue(allocator, event.actor_id);
-        defer allocator.free(escaped_actor);
         try extension.print(allocator, " suser={s}", .{escaped_actor});
     }
 
@@ -60,10 +77,16 @@ pub fn formatCef(
         try extension.print(allocator, " src={s}", .{escaped_ip});
     }
 
-    if (event.request_id) |request_id| {
-        const escaped_req = try escapeValue(allocator, request_id);
-        defer allocator.free(escaped_req);
-        try extension.print(allocator, " requestId={s}", .{escaped_req});
+    // GAP-052: request_id is rendered twice (requestId + deviceExternalId)
+    // but escaped once.
+    const escaped_request: ?[]const u8 = if (event.request_id) |request_id|
+        try escapeValue(allocator, request_id)
+    else
+        null;
+    defer if (escaped_request) |er| allocator.free(er);
+
+    if (escaped_request) |er| {
+        try extension.print(allocator, " requestId={s}", .{er});
     }
 
     if (event.trace_id) |trace_id| {
@@ -74,10 +97,8 @@ pub fn formatCef(
         try extension.print(allocator, " spanId={s}", .{@as([]const u8, &span_id)});
     }
 
-    // Custom signature fields
-    const escaped_cs1 = try escapeValue(allocator, event.actor_id);
-    defer allocator.free(escaped_cs1);
-    try extension.print(allocator, " cs1Label=actorId cs1={s}", .{escaped_cs1});
+    // Custom signature fields (reuses escaped_actor from above — GAP-052)
+    try extension.print(allocator, " cs1Label=actorId cs1={s}", .{escaped_actor});
 
     if (event.session_id) |session_id| {
         const escaped_session = try escapeValue(allocator, session_id);
@@ -85,10 +106,8 @@ pub fn formatCef(
         try extension.print(allocator, " cs2Label=sessionId cs2={s}", .{escaped_session});
     }
 
-    if (event.request_id) |request_id| {
-        const escaped_dev = try escapeValue(allocator, request_id);
-        defer allocator.free(escaped_dev);
-        try extension.print(allocator, " deviceExternalId={s}", .{escaped_dev});
+    if (escaped_request) |er| {
+        try extension.print(allocator, " deviceExternalId={s}", .{er});
     }
 
     // Add metadata fields if present
@@ -233,6 +252,13 @@ fn escapeKey(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
 /// a neutralized control byte, never input that literally contained "\xNN"
 /// (which arrives as `\\xNN`).
 pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_header: bool) ![]const u8 {
+    // PR-005 fast path: most real-world values contain nothing that needs
+    // escaping — return a plain copy without ArrayList bookkeeping.
+    const clean = for (input) |c| {
+        if (needsCefEscape(c, is_header)) break false;
+    } else true;
+    if (clean) return allocator.dupe(u8, input);
+
     var result = try std.ArrayList(u8).initCapacity(allocator, input.len + 16);
     errdefer result.deinit(allocator);
 
@@ -253,6 +279,15 @@ pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_heade
     }
 
     return result.toOwnedSlice(allocator);
+}
+
+/// True when `c` would be rewritten by `escapeCefString` in the given mode.
+/// Mirrors the switch in the slow path: backslash, all C0 control bytes
+/// (including `\n`/`\r`, which both modes rewrite), DEL, plus the
+/// mode-specific metacharacter (`|` for headers, `=` for extensions).
+inline fn needsCefEscape(c: u8, is_header: bool) bool {
+    if (c == '\\' or c < 0x20 or c == 0x7F) return true;
+    return if (is_header) c == '|' else c == '=';
 }
 
 test "CEF formatting" {
@@ -412,6 +447,82 @@ test "escapeCefString: extension value escapes backslash, equals, and newlines" 
     const r5 = try escapeCefString(allocator, "val|ue", false);
     defer allocator.free(r5);
     try testing.expectEqualStrings("val|ue", r5);
+}
+
+test "GAP-052 characterization: CEF output with actor_id and request_id set" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const identity = config.CefIdentityConfig{
+        .vendor = "DEVNW",
+        .product = "AUDIT",
+        .version = "0.1.0",
+    };
+
+    const event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "jane.doe",
+        .subject_id = "bob",
+        .request_id = "req-abc123",
+        .session_id = "ses-999",
+        .source_ip = "203.0.113.5",
+        .trace_id = time.TEST_TRACE_ID,
+        .span_id = time.TEST_SPAN_ID,
+        .metadata = null,
+    };
+
+    const cef_msg = try formatCef(allocator, &event, &identity, clock);
+    defer allocator.free(cef_msg);
+
+    // Full-output pin: actor_id appears twice (suser + cs1), request_id
+    // appears twice (requestId + deviceExternalId). Field order and content
+    // must not change when the escaping is deduplicated.
+    try testing.expectEqualStrings(
+        "CEF:0|DEVNW|AUDIT|0.1.0|auth.login|User login|5|" ++
+            "rt=2025-01-01T00:00:00.000Z act=login outcome=success" ++
+            " suser=jane.doe duser=bob src=203.0.113.5 requestId=req-abc123" ++
+            " traceId=11111111111111111111111111111111 spanId=2222222222222222" ++
+            " cs1Label=actorId cs1=jane.doe cs2Label=sessionId cs2=ses-999" ++
+            " deviceExternalId=req-abc123",
+        cef_msg,
+    );
+}
+
+test "PR-005: escapeCefString fast path returns equal content in a distinct allocation" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const input: []const u8 = "clean value with no special bytes 1234567890";
+
+    const header = try escapeCefString(allocator, input, true);
+    defer allocator.free(header);
+    try testing.expectEqualStrings(input, header);
+    try testing.expect(header.ptr != input.ptr);
+
+    const ext = try escapeCefString(allocator, input, false);
+    defer allocator.free(ext);
+    try testing.expectEqualStrings(input, ext);
+    try testing.expect(ext.ptr != input.ptr);
+
+    // Pipe is clean in extensions but dirty in headers; equals is the reverse.
+    const pipe_ext = try escapeCefString(allocator, "a|b", false);
+    defer allocator.free(pipe_ext);
+    try testing.expectEqualStrings("a|b", pipe_ext);
+
+    const eq_header = try escapeCefString(allocator, "a=b", true);
+    defer allocator.free(eq_header);
+    try testing.expectEqualStrings("a=b", eq_header);
 }
 
 test "escapeCefString: no special characters returns input unchanged" {

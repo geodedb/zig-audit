@@ -192,9 +192,19 @@ pub const SyslogSender = struct {
         // A disabled sink accepts nothing and loses nothing.
         if (!self.config.enabled) return .enqueued;
 
-        const cef_msg = try cef.formatCef(self.allocator, event, &self.identity, self.clock);
-        const syslog_line = try self.formatSyslogLine(event, cef_msg);
+        // PR-008: format the RFC 3339 timestamp exactly once per send and
+        // share it between the CEF payload (rt=) and the RFC 5424 header.
+        // GAP-046/A7: the event's own timestamp is authoritative; the clock
+        // fallback only covers direct calls with unstamped (ts == 0) events.
+        var ts_buf: [64]u8 = undefined;
+        const timestamp = if (event.ts_unix_ms != 0)
+            time.formatRfc3339(event.ts_unix_ms, &ts_buf)
+        else
+            self.clock.nowRfc3339(&ts_buf);
+
+        const cef_msg = try cef.formatCefWithTimestamp(self.allocator, event, &self.identity, timestamp);
         defer self.allocator.free(cef_msg);
+        const syslog_line = try formatRfc5424WithTimestamp(self.allocator, event, cef_msg, self.service, self.config, timestamp);
 
         if (!self.ch.trySend(syslog_line)) {
             self.allocator.free(syslog_line);
@@ -209,10 +219,6 @@ pub const SyslogSender = struct {
 
     pub fn getDroppedCount(self: *SyslogSender) u64 {
         return self.dropped_count.load(.monotonic);
-    }
-
-    fn formatSyslogLine(self: *SyslogSender, event: *const events.AuditEvent, cef_msg: []const u8) ![]const u8 {
-        return formatRfc5424(self.allocator, event, cef_msg, self.service, self.config, self.clock);
     }
 
     /// Background worker: blocks on channel.receive(), sends each message,
@@ -320,8 +326,10 @@ pub const SyslogSender = struct {
         }
         const socket = self.tcp_socket.?;
 
-        const length_prefix = try std.fmt.allocPrint(self.allocator, "{d} ", .{message.len});
-        defer self.allocator.free(length_prefix);
+        // GAP-051: the octet-count prefix is at most 20 digits (usize) plus a
+        // space — format on the stack instead of allocating per send.
+        var prefix_buf: [24]u8 = undefined;
+        const length_prefix = std.fmt.bufPrint(&prefix_buf, "{d} ", .{message.len}) catch unreachable;
 
         // Use sendto with NULL addr as a raw "send" equivalent on Linux.
         const rc1 = linux.sendto(socket, length_prefix.ptr, length_prefix.len, 0, null, 0);
@@ -352,13 +360,12 @@ pub const SyslogSender = struct {
     }
 };
 
-/// Format an audit event as an RFC 5424 syslog line with a CEF payload.
-/// Shared implementation used by both SyslogSender and MockSyslogSender.
+/// Format an audit event as an RFC 5424 syslog line with a CEF payload,
+/// formatting the RFC 3339 timestamp internally. Thin wrapper over
+/// `formatRfc5424WithTimestamp` for standalone callers (and the mock);
+/// `SyslogSender.send` formats the timestamp once and shares it with the
+/// CEF payload instead (PR-008).
 pub fn formatRfc5424(allocator: std.mem.Allocator, event: *const events.AuditEvent, cef_msg: []const u8, service: config.ServiceConfig, syslog_cfg: config.SyslogSinkConfig, clock: time.Clock) ![]const u8 {
-    const facility = syslog_cfg.rfc5424.facility.toInt();
-    const severity = event.severity.toSyslogSeverity();
-    const pri = facility * 8 + severity;
-
     // GAP-046/A7: the event's own timestamp is authoritative (audit()
     // stamps ts_unix_ms before fan-out); the clock fallback only covers
     // direct calls with unstamped (ts == 0) events.
@@ -367,6 +374,17 @@ pub fn formatRfc5424(allocator: std.mem.Allocator, event: *const events.AuditEve
         time.formatRfc3339(event.ts_unix_ms, &ts_buf)
     else
         clock.nowRfc3339(&ts_buf);
+
+    return formatRfc5424WithTimestamp(allocator, event, cef_msg, service, syslog_cfg, timestamp);
+}
+
+/// Format an audit event as an RFC 5424 syslog line with a CEF payload,
+/// using a pre-formatted RFC 3339 timestamp (rendered into the header
+/// verbatim).
+pub fn formatRfc5424WithTimestamp(allocator: std.mem.Allocator, event: *const events.AuditEvent, cef_msg: []const u8, service: config.ServiceConfig, syslog_cfg: config.SyslogSinkConfig, timestamp: []const u8) ![]const u8 {
+    const facility = syslog_cfg.rfc5424.facility.toInt();
+    const severity = event.severity.toSyslogSeverity();
+    const pri = facility * 8 + severity;
 
     return std.fmt.allocPrint(allocator, "<{d}>1 {s} {s} {s} {d} AUDIT - {s}", .{
         pri,

@@ -251,6 +251,7 @@ pub const AuditLogger = struct {
     /// throwaway ObjectMap.  Fixed fields are accounted for with a conservative
     /// overhead constant; only metadata (the unbounded part) is serialized.
     fn estimateEventSize(self: *AuditLogger, event: *const events.AuditEvent) !usize {
+        _ = self; // measuring no longer allocates (GAP-056); kept as a method for call-site stability
         // Base overhead covers JSON braces, commas, quotes around keys/values,
         // colons, and the fixed-name keys (category, action, outcome, severity,
         // actor_id, ts_unix_ms, trace_id, span_id, subject_id, request_id,
@@ -278,13 +279,19 @@ pub const AuditLogger = struct {
         // Timestamp: up to 20 digits for i128
         size += 20;
 
-        // Metadata is the variable/unbounded part -- serialize only this
+        // Metadata is the variable/unbounded part -- measure it with a
+        // counting (discarding) writer instead of serializing into a
+        // throwaway heap buffer (GAP-056).
         if (event.metadata) |metadata| {
-            const meta_json = std.json.Stringify.valueAlloc(self.allocator, metadata, .{}) catch |err| switch (err) {
-                error.OutOfMemory => return 8192 + 1, // trigger truncation on OOM
+            var scratch: [256]u8 = undefined;
+            var counter: std.Io.Writer.Discarding = .init(&scratch);
+            std.json.Stringify.value(metadata, .{}, &counter.writer) catch |err| switch (err) {
+                // Discarding never fails, but stay fail-closed: an
+                // unmeasurable payload must trigger truncation.
+                error.WriteFailed => return 8192 + 1,
             };
-            defer self.allocator.free(meta_json);
-            size += meta_json.len + 16; // +16 for "metadata": wrapper
+            const meta_len = std.math.cast(usize, counter.fullCount()) orelse return 8192 + 1;
+            size += meta_len + 16; // +16 for "metadata": wrapper
         }
 
         return size;
@@ -407,6 +414,45 @@ test "estimateEventSize: small event stays under 8192" {
     const size = try logger_inst.estimateEventSize(&event);
     // A small event with no metadata should be well under 8 KiB
     try std.testing.expect(size < 1024);
+}
+
+test "GAP-056 characterization: estimateEventSize metadata sizing matches Stringify.valueAlloc" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_config = try config.loadTestConfig(allocator);
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
+
+    const logger_inst = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+    defer logger_inst.deinit();
+
+    // Mixed-type metadata, including a nested object and strings that need
+    // JSON escaping, so the byte count exercises real Stringify behavior.
+    var nested_obj: std.json.ObjectMap = .empty;
+    defer nested_obj.deinit(allocator);
+    try nested_obj.put(allocator, "inner", std.json.Value{ .string = "line1\nline2 \"quoted\"" });
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "department", std.json.Value{ .string = "Engineering" });
+    try metadata_obj.put(allocator, "attempts", std.json.Value{ .integer = 3 });
+    try metadata_obj.put(allocator, "mfa", std.json.Value{ .bool = true });
+    try metadata_obj.put(allocator, "nested", std.json.Value{ .object = nested_obj });
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var event = makeTestEvent();
+    const base_size = try logger_inst.estimateEventSize(&event);
+
+    event.metadata = metadata;
+    const with_meta_size = try logger_inst.estimateEventSize(&event);
+
+    // Pin: the metadata contribution is exactly serialized-length + 16,
+    // where serialized-length is what Stringify.valueAlloc produces.
+    const meta_json = try std.json.Stringify.valueAlloc(allocator, metadata, .{});
+    defer allocator.free(meta_json);
+    try std.testing.expectEqual(base_size + meta_json.len + 16, with_meta_size);
 }
 
 test "estimateEventSize: large metadata exceeds 8192" {
