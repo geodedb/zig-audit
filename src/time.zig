@@ -35,14 +35,27 @@ pub const Clock = struct {
     }
 };
 
+/// Last representable second: 9999-12-31T23:59:59Z. Beyond this the std
+/// epoch math overflows its u16 Year and the fixed 4-digit year format
+/// breaks, so larger timestamps are rejected rather than clamped.
+const max_rfc3339_secs: i128 = 253_402_300_799;
+
 /// Format a millisecond-precision UTC timestamp as an RFC 3339 string.
 /// Shared implementation used by both SystemClock and FixedClock.
+///
+/// GAP-044/A5: timestamps outside [1970-01-01T00:00:00.000Z,
+/// 9999-12-31T23:59:59.999Z] are not representable and yield "" (matching
+/// the documented empty-string-on-failure contract of `Clock.nowRfc3339`)
+/// instead of panicking on the integer casts / epoch-year overflow.
 pub fn formatRfc3339(ts_ms: i128, buf: []u8) []const u8 {
+    if (ts_ms < 0) return "";
     const seconds = @divTrunc(ts_ms, 1000);
+    if (seconds > max_rfc3339_secs) return "";
     const millis = @mod(ts_ms, 1000);
-    const millis_u32: u32 = @intCast(@as(i64, @intCast(millis)));
+    const millis_u32: u32 = @intCast(millis);
 
-    const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
+    const secs_u64 = std.math.cast(u64, seconds) orelse return "";
+    const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = secs_u64 };
     const day_seconds = epoch_seconds.getDaySeconds();
     const year_day = epoch_seconds.getEpochDay().calculateYearDay();
     const month_day = year_day.calculateMonthDay();
@@ -310,6 +323,25 @@ test "formatRfc3339 preserves sub-second precision" {
     // 2025-01-01T00:00:01.456Z
     const result = formatRfc3339(TEST_TIMESTAMP_MS + 1456, &buf);
     try std.testing.expectEqualStrings("2025-01-01T00:00:01.456Z", result);
+}
+
+test "formatRfc3339 returns empty string for unrepresentable timestamps (GAP-044/A5)" {
+    var buf: [64]u8 = undefined;
+
+    // Pre-epoch timestamps are not representable (must not panic).
+    try std.testing.expectEqualStrings("", formatRfc3339(-1000, &buf));
+    // -500 ms divTruncs to 0 seconds; without the negative guard it would
+    // silently format as 1970-01-01T00:00:00.500Z instead of rejecting.
+    try std.testing.expectEqualStrings("", formatRfc3339(-500, &buf));
+
+    // Absurdly large timestamps must not panic either.
+    try std.testing.expectEqualStrings("", formatRfc3339(std.math.maxInt(i128), &buf));
+    // Castable to u64 seconds but past year 9999 (would overflow the u16
+    // epoch Year and break the fixed 4-digit format).
+    try std.testing.expectEqualStrings("", formatRfc3339(253_402_300_800_000, &buf));
+
+    // Boundary: the last representable millisecond still formats.
+    try std.testing.expectEqualStrings("9999-12-31T23:59:59.999Z", formatRfc3339(253_402_300_799_999, &buf));
 }
 
 test "formatRfc3339 agrees with FixedClock output" {
