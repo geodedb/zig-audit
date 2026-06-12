@@ -90,9 +90,14 @@ test {
     @import("std").testing.refAllDecls(@This());
 }
 
-test "root.version matches build.zig.zon (GAP-074)" {
-    // build_options.package_version is injected from build.zig.zon by
-    // build.zig — this pins the public constant to the package version.
+test "root.version is a valid semantic version (GAP-074)" {
+    // Single-sourcing is enforced at build time: build.zig reads
+    // `@import("build.zig.zon").version` and injects it as
+    // build_options.package_version, which `version` aliases. Drift
+    // between root.zig and build.zig.zon is therefore structurally
+    // impossible; this test guards the remaining runtime property —
+    // that the injected string is well-formed semver.
     const std = @import("std");
-    try std.testing.expectEqualStrings(@import("build_options").package_version, version);
+    const parsed = try std.SemanticVersion.parse(version);
+    try std.testing.expect(parsed.major != 0 or parsed.minor != 0 or parsed.patch != 0);
 }

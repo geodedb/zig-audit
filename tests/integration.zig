@@ -154,7 +154,7 @@ test "integration: file rotation functionality" {
     const io = std.Io.Threaded.global_single_threaded.io();
     const cwd = std.Io.Dir.cwd();
 
-    const test_dir = "zig-out/tmp/test-logs";
+    const test_dir = "zig-out/tmp/it-rotation";
     cwd.createDirPath(io, test_dir) catch {};
     defer cwd.deleteTree(io, test_dir) catch {};
 
