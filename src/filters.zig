@@ -116,6 +116,7 @@ pub fn isSensitiveKey(allocator: std.mem.Allocator, key: []const u8) ?RedactionT
     return null;
 }
 
+/// Exposed for testing (tests/test_filters.zig).
 pub fn isJwt(value: []const u8) bool {
     var segments: u8 = 0;
     var in_segment = false;
@@ -147,6 +148,7 @@ fn isBase64UrlChar(c: u8) bool {
         c == '-' or c == '_';
 }
 
+/// Exposed for testing (tests/test_filters.zig).
 pub fn isPan(value: []const u8) bool {
     var digits: [32]u8 = undefined;
     var digit_count: usize = 0;
@@ -181,6 +183,7 @@ pub fn isPan(value: []const u8) bool {
     return sum % 10 == 0;
 }
 
+/// Exposed for testing (tests/test_filters.zig).
 pub fn isEmail(value: []const u8) bool {
     const at_pos = std.mem.indexOf(u8, value, "@") orelse return false;
     if (at_pos == 0 or at_pos == value.len - 1) return false;
@@ -201,6 +204,7 @@ pub fn isEmail(value: []const u8) bool {
     return std.mem.indexOf(u8, domain, ".") != null;
 }
 
+/// Exposed for testing (tests/test_filters.zig).
 pub fn isPhone(value: []const u8) bool {
     var digit_count: usize = 0;
     for (value) |c| {
@@ -213,17 +217,20 @@ pub fn isPhone(value: []const u8) bool {
     return digit_count >= 10 and digit_count <= 15;
 }
 
+/// Exposed for testing (tests/test_filters.zig).
 pub fn isPemPrivateKey(value: []const u8) bool {
     return std.mem.indexOf(u8, value, "-----BEGIN") != null and
         std.mem.indexOf(u8, value, "PRIVATE KEY-----") != null;
 }
 
+/// Exposed for testing (tests/test_filters.zig).
 pub fn maskEmail(allocator: std.mem.Allocator, email_addr: []const u8) ![]const u8 {
     const at_pos = std.mem.indexOf(u8, email_addr, "@") orelse return allocator.dupe(u8, email_addr);
     const domain = email_addr[at_pos..];
     return std.fmt.allocPrint(allocator, "***{s}", .{domain});
 }
 
+/// Exposed for testing (tests/test_filters.zig).
 pub fn maskPhone(allocator: std.mem.Allocator, phone: []const u8) ![]const u8 {
     var digits: [32]u8 = undefined;
     var digit_count: usize = 0;
@@ -243,7 +250,7 @@ pub fn maskPhone(allocator: std.mem.Allocator, phone: []const u8) ![]const u8 {
     return std.fmt.allocPrint(allocator, "{s}***{s}", .{ first_part, last_part });
 }
 
-pub fn detectValueType(value: []const u8) ?RedactionToken {
+fn detectValueType(value: []const u8) ?RedactionToken {
     if (isJwt(value)) return .jwt;
     if (isPan(value)) return .card;
     if (isEmail(value)) return .email;
@@ -368,42 +375,7 @@ fn filterAndRedactMetadataRecursive(
                         try filtered_map.put(allocator, dup_key, processed_value);
                     },
                     .redact => |redaction| {
-                        // Determine the redacted string, applying masking when pii_mode == .mask.
-                        // Both tokens are pre-resolved by shouldFilterField (GAP-054):
-                        // key_token from isSensitiveKey, value_token from value-type
-                        // detection — no redundant second detection pass here.
-                        const redacted_str = redact_blk: {
-                            // First check if the value itself is a detectable type
-                            if (value == .string) {
-                                if (redaction.value_token) |detected| {
-                                    break :redact_blk try redactOrMaskValue(allocator, value.string, detected, filters_cfg);
-                                }
-                            }
-                            // Fall back to key-based redaction token (already resolved)
-                            if (redaction.key_token) |kt| {
-                                // For key-based PII redaction with masking, check value
-                                if (filters_cfg.pii_mode == .mask and value == .string) {
-                                    if (kt == .email and isEmail(value.string)) {
-                                        break :redact_blk try maskEmail(allocator, value.string);
-                                    }
-                                    if (kt == .phone and isPhone(value.string)) {
-                                        break :redact_blk try maskPhone(allocator, value.string);
-                                    }
-                                }
-                                // For key-based PII redaction with hashing, pseudonymize
-                                // detected email/phone values (GAP-050).
-                                if (filters_cfg.pii_mode == .hash and value == .string) {
-                                    if (kt == .email and isEmail(value.string)) {
-                                        break :redact_blk try hashValue(allocator, value.string);
-                                    }
-                                    if (kt == .phone and isPhone(value.string)) {
-                                        break :redact_blk try hashValue(allocator, value.string);
-                                    }
-                                }
-                                break :redact_blk try allocator.dupe(u8, kt.toString());
-                            }
-                            break :redact_blk try allocator.dupe(u8, "[REDACTED]");
-                        };
+                        const redacted_str = try resolveRedactedString(allocator, value, redaction, filters_cfg);
                         errdefer allocator.free(redacted_str);
                         const dup_key = try allocator.dupe(u8, key);
                         errdefer allocator.free(dup_key);
@@ -425,6 +397,49 @@ fn filterAndRedactMetadataRecursive(
         // caused a use-after-free + double-free (QR-002).
         else => try json_util.cloneJsonValue(allocator, metadata),
     };
+}
+
+/// Determine the redacted replacement string for a field, applying masking
+/// when pii_mode == .mask. Both tokens are pre-resolved by
+/// shouldFilterField (GAP-054): key_token from isSensitiveKey, value_token
+/// from value-type detection — no redundant second detection pass here.
+/// Caller owns the returned string.
+fn resolveRedactedString(
+    allocator: std.mem.Allocator,
+    value: std.json.Value,
+    redaction: FilterResult.Redaction,
+    filters_cfg: *const config.FiltersConfig,
+) std.mem.Allocator.Error![]const u8 {
+    // First check if the value itself is a detectable type
+    if (value == .string) {
+        if (redaction.value_token) |detected| {
+            return redactOrMaskValue(allocator, value.string, detected, filters_cfg);
+        }
+    }
+    // Fall back to key-based redaction token (already resolved)
+    if (redaction.key_token) |kt| {
+        // For key-based PII redaction with masking, check value
+        if (filters_cfg.pii_mode == .mask and value == .string) {
+            if (kt == .email and isEmail(value.string)) {
+                return maskEmail(allocator, value.string);
+            }
+            if (kt == .phone and isPhone(value.string)) {
+                return maskPhone(allocator, value.string);
+            }
+        }
+        // For key-based PII redaction with hashing, pseudonymize
+        // detected email/phone values (GAP-050).
+        if (filters_cfg.pii_mode == .hash and value == .string) {
+            if (kt == .email and isEmail(value.string)) {
+                return hashValue(allocator, value.string);
+            }
+            if (kt == .phone and isPhone(value.string)) {
+                return hashValue(allocator, value.string);
+            }
+        }
+        return allocator.dupe(u8, kt.toString());
+    }
+    return allocator.dupe(u8, "[REDACTED]");
 }
 
 /// Recursively process a value for redaction. For objects, recurse into

@@ -119,58 +119,26 @@ pub const AuditLogger = struct {
         try ev.validate();
         // Single-copy metadata pipeline (GAP-049, PERF-001, PERF-005): the
         // clone deliberately omits metadata. The filtered tree is built
-        // directly from the CALLER's metadata below and MOVED onto the
-        // clone — one owned tree total instead of clone + filter + re-clone.
+        // directly from the CALLER's metadata in applyRedaction and MOVED
+        // onto the clone — one owned tree total instead of
+        // clone + filter + re-clone.
         var event = try ev.cloneWithoutMetadata(self.allocator);
         defer event.freeCloned(self.allocator);
 
-        if (event.ts_unix_ms == 0) {
-            event.ts_unix_ms = self.clock.nowMs();
+        self.enrichClonedEvent(&event);
+
+        switch (try self.applyRedaction(ev, &event)) {
+            .drop => {
+                // The function honoured the redaction policy successfully
+                // (`span_ok = true`), but the audit record never reached a
+                // sink (`span_durable = false`). Operators can spot dropped
+                // records by filtering for `audit.durable=false`.
+                span_ok = true;
+                span_durable = false;
+                return;
+            },
+            .proceed => {},
         }
-
-        if (event.trace_id == null) {
-            var trace_buf: [32]u8 = undefined;
-            self.id_gen.traceId(&trace_buf);
-            event.trace_id = trace_buf;
-        }
-
-        if (event.span_id == null) {
-            var span_buf: [16]u8 = undefined;
-            self.id_gen.spanId(&span_buf);
-            event.span_id = span_buf;
-        }
-
-        // Apply filtering and redaction directly from the caller's metadata
-        // tree. The filters never mutate their input and always return an
-        // independently-owned tree (every path dupes/clones — QR-002), so
-        // reading `ev.metadata` here is safe even though we don't own it.
-        const filtered_metadata = if (ev.metadata) |metadata|
-            try filters.filterAndRedactMetadata(self.allocator, metadata, &self.config.filters)
-        else
-            null;
-
-        // If filtering resulted in dropping the event, log error and return.
-        // The function honoured the redaction policy successfully
-        // (`span_ok = true`), but the audit record never reached a
-        // sink (`span_durable = false`). Operators can spot dropped
-        // records by filtering for `audit.durable=false`.
-        // (`filtered_metadata` is null on this path — nothing to free.)
-        if (ev.metadata != null and filtered_metadata == null) {
-            if (self.file_sink) |sink| {
-                // This path already reports durable=false below, so the
-                // enqueue-vs-drop status of the marker itself adds nothing.
-                _ = try sink.writeError("Event dropped due to unredactable sensitive content");
-            }
-            span_ok = true;
-            span_durable = false;
-            return;
-        }
-
-        // MOVE the filtered tree onto the cloned event (its metadata is null
-        // until here). Ownership transfers: the deferred freeCloned — or the
-        // truncation branch below — frees it. No re-clone (copy #3 of the
-        // old pipeline) and no defer of filtered_metadata itself.
-        event.metadata = filtered_metadata;
 
         // Check message size limit (8 KiB after redaction).
         // Estimate size without full serialization: sum known field lengths
@@ -245,6 +213,68 @@ pub const AuditLogger = struct {
         // when the function returns normally.
         span_ok = true;
         span_durable = !any_dropped;
+    }
+
+    /// Stamp the cloned event with the injected clock and ID generator:
+    /// fill in the timestamp (when the caller passed 0) and generate
+    /// trace/span IDs (when the caller passed null).
+    fn enrichClonedEvent(self: *AuditLogger, event: *events.AuditEvent) void {
+        if (event.ts_unix_ms == 0) {
+            event.ts_unix_ms = self.clock.nowMs();
+        }
+
+        if (event.trace_id == null) {
+            var trace_buf: [32]u8 = undefined;
+            self.id_gen.traceId(&trace_buf);
+            event.trace_id = trace_buf;
+        }
+
+        if (event.span_id == null) {
+            var span_buf: [16]u8 = undefined;
+            self.id_gen.spanId(&span_buf);
+            event.span_id = span_buf;
+        }
+    }
+
+    /// Outcome of `applyRedaction`: `.drop` means the redaction policy
+    /// dropped the whole event (drop marker already written to the file
+    /// sink) and `audit()` must return without dispatching.
+    const RedactionOutcome = enum { proceed, drop };
+
+    /// Apply filtering and redaction directly from the caller's metadata
+    /// tree and MOVE the filtered result onto the cloned event. The filters
+    /// never mutate their input and always return an independently-owned
+    /// tree (every path dupes/clones — QR-002), so reading `ev.metadata`
+    /// here is safe even though we don't own it.
+    fn applyRedaction(
+        self: *AuditLogger,
+        ev: *const events.AuditEvent,
+        event: *events.AuditEvent,
+    ) !RedactionOutcome {
+        const filtered_metadata = if (ev.metadata) |metadata|
+            try filters.filterAndRedactMetadata(self.allocator, metadata, &self.config.filters)
+        else
+            null;
+
+        // If filtering resulted in dropping the event, log error and signal
+        // the caller to return.
+        // (`filtered_metadata` is null on this path — nothing to free.)
+        if (ev.metadata != null and filtered_metadata == null) {
+            if (self.file_sink) |sink| {
+                // The drop path already reports durable=false, so the
+                // enqueue-vs-drop status of the marker itself adds nothing.
+                _ = try sink.writeError("Event dropped due to unredactable sensitive content");
+            }
+            return .drop;
+        }
+
+        // MOVE the filtered tree onto the cloned event (its metadata is null
+        // until here). Ownership transfers: the deferred freeCloned in
+        // audit() — or its truncation branch — frees it. No re-clone
+        // (copy #3 of the old pipeline) and no defer of filtered_metadata
+        // itself.
+        event.metadata = filtered_metadata;
+        return .proceed;
     }
 
     /// Estimate the serialized JSON size of an audit event without building a

@@ -273,12 +273,56 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     };
     if (ver != 1) return error.UnsupportedVersion;
 
-    // ADV-1: every dupe below is paired with an errdefer so a mid-parse
-    // error (wrong type, out-of-range integer, OOM, ...) frees everything
-    // allocated so far. On success none of them fire and ownership of all
-    // heap members transfers to the returned Config (freed by its deinit).
-    // Mirrors the errdefer-chain style of events.zig clone().
+    // ADV-1: every dupe in the parse helpers below is paired with an
+    // errdefer so a mid-parse error (wrong type, out-of-range integer,
+    // OOM, ...) frees everything allocated so far. Each helper cleans up
+    // its OWN partial allocations on failure; the errdefers HERE free a
+    // helper's successfully-returned members when a LATER helper fails. On
+    // success none of them fire and ownership of all heap members transfers
+    // to the returned Config (freed by its deinit). Mirrors the
+    // errdefer-chain style of events.zig clone().
 
+    const service = try parseService(allocator, root_obj);
+    errdefer {
+        allocator.free(service.name);
+        allocator.free(service.host);
+    }
+
+    const identity = try parseIdentity(allocator, root_obj);
+    errdefer {
+        allocator.free(identity.cef.vendor);
+        allocator.free(identity.cef.product);
+        allocator.free(identity.cef.version);
+    }
+
+    const sinks = try parseSinks(allocator, root_obj);
+    errdefer {
+        allocator.free(sinks.file.path);
+        if (sinks.file.allowed_base_dir) |base| allocator.free(base);
+        allocator.free(sinks.syslog.host);
+    }
+
+    const filters = try parseFilters(allocator, root_obj);
+    errdefer {
+        for (filters.allow_fields) |field| allocator.free(field);
+        allocator.free(filters.allow_fields);
+        for (filters.deny_key_patterns) |pattern| allocator.free(pattern);
+        allocator.free(filters.deny_key_patterns);
+    }
+
+    return Config{
+        .version = ver,
+        .service = service,
+        .identity = identity,
+        .sinks = sinks,
+        .filters = filters,
+        .allocator = allocator,
+    };
+}
+
+/// Parse the `service` section. On success the caller owns `name`/`host`;
+/// on error every partial allocation is freed here (ADV-1).
+fn parseService(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !ServiceConfig {
     const service_value = root_obj.get("service") orelse return error.MissingService;
     if (service_value != .object) return error.InvalidConfig;
     const service_obj = service_value.object;
@@ -286,12 +330,16 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     errdefer allocator.free(service_name);
     const service_host = try allocator.dupe(u8, try jsonString(service_obj, "host"));
     errdefer allocator.free(service_host);
-    const service = ServiceConfig{
+    return ServiceConfig{
         .name = service_name,
         .host = service_host,
         .pid = try jsonIntegerInRange(u32, service_obj, "pid"),
     };
+}
 
+/// Parse the `identity` section. On success the caller owns the three CEF
+/// strings; on error every partial allocation is freed here (ADV-1).
+fn parseIdentity(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !IdentityConfig {
     const identity_value = root_obj.get("identity") orelse return error.MissingIdentity;
     if (identity_value != .object) return error.InvalidConfig;
     const identity_obj = identity_value.object;
@@ -302,14 +350,19 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
     errdefer allocator.free(cef_product);
     const cef_version = try allocator.dupe(u8, try jsonString(cef_obj, "version"));
     errdefer allocator.free(cef_version);
-    const identity = IdentityConfig{
+    return IdentityConfig{
         .cef = CefIdentityConfig{
             .vendor = cef_vendor,
             .product = cef_product,
             .version = cef_version,
         },
     };
+}
 
+/// Parse the `sinks` section (file + syslog). On success the caller owns
+/// `file.path`, `file.allowed_base_dir`, and `syslog.host`; on error every
+/// partial allocation is freed here (ADV-1).
+fn parseSinks(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !SinksConfig {
     const sinks_value = root_obj.get("sinks") orelse return error.MissingSinks;
     if (sinks_value != .object) return error.InvalidConfig;
     const sinks_obj = sinks_value.object;
@@ -368,11 +421,16 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
         },
     };
 
-    const sinks = SinksConfig{
+    return SinksConfig{
         .file = file_sink,
         .syslog = syslog_sink,
     };
+}
 
+/// Parse the `filters` section. On success the caller owns both string
+/// arrays and their elements; on error every partial allocation is freed
+/// here (ADV-1).
+fn parseFilters(allocator: std.mem.Allocator, root_obj: std.json.ObjectMap) !FiltersConfig {
     const filters_value = root_obj.get("filters") orelse return error.MissingFilters;
     if (filters_value != .object) return error.InvalidConfig;
     const filters_obj = filters_value.object;
@@ -404,21 +462,12 @@ fn parseConfig(allocator: std.mem.Allocator, json: std.json.Value) !Config {
         deny_patterns_count = i + 1;
     }
 
-    const filters = FiltersConfig{
+    return FiltersConfig{
         .default_deny = try jsonBool(filters_obj, "default_deny"),
         .allow_fields = allow_fields,
         .deny_key_patterns = deny_patterns,
         .pii_mode = try PiiMode.fromString(try jsonString(filters_obj, "pii_mode")),
         .pci_mode = try jsonBool(filters_obj, "pci_mode"),
-    };
-
-    return Config{
-        .version = ver,
-        .service = service,
-        .identity = identity,
-        .sinks = sinks,
-        .filters = filters,
-        .allocator = allocator,
     };
 }
 
