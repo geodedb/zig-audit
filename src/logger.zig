@@ -171,7 +171,11 @@ pub const AuditLogger = struct {
             {
                 const key = try self.allocator.dupe(u8, "_original_size");
                 errdefer self.allocator.free(key);
-                try truncation_obj.put(self.allocator, key, std.json.Value{ .integer = @intCast(estimated_size) });
+                // Defensive cast: estimated_size is bounded in practice
+                // (fields capped at MAX_FIELD_LEN, metadata at 8192+1), but
+                // saturate rather than trap on a theoretical usize > i64 max.
+                const size_i64 = std.math.cast(i64, estimated_size) orelse std.math.maxInt(i64);
+                try truncation_obj.put(self.allocator, key, std.json.Value{ .integer = size_i64 });
             }
             // The errdefer above dies with this block: once `truncation_obj`
             // is stored here, ownership transfers to `event.metadata` and the
