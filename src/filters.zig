@@ -266,14 +266,34 @@ fn detectValueTypeFiltered(value: []const u8, filters_cfg: *const config.Filters
     return null;
 }
 
-/// Produce the redacted (or masked) string for a detected value type,
-/// respecting pii_mode. When pii_mode == .mask and the detected type
-/// is email or phone, returns a masked version instead of the full
-/// redaction token.
+/// Deterministic pseudonymization for pii_mode == .hash:
+/// `sha256:<first 16 hex chars of SHA-256(value)>`.
+///
+/// LIMITATION: this is an unkeyed hash of low-entropy PII (emails, phone
+/// numbers), so it is vulnerable to dictionary/brute-force attacks — anyone
+/// with a candidate value can confirm it by hashing. Treat the output as
+/// correlatable-but-not-secret: it lets log consumers join events for the
+/// same subject without exposing the raw value, but it is NOT a substitute
+/// for redaction when confidentiality from the log reader is required.
+fn hashValue(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
+    const hex = std.fmt.bytesToHex(digest[0..8].*, .lower);
+    return std.fmt.allocPrint(allocator, "sha256:{s}", .{hex});
+}
+
+/// Produce the redacted (or masked/hashed) string for a detected value type,
+/// respecting pii_mode. When pii_mode == .mask and the detected type is
+/// email or phone, returns a masked version instead of the full redaction
+/// token. When pii_mode == .hash, returns a deterministic sha256
+/// pseudonym (see hashValue) for email/phone values.
 fn redactOrMaskValue(allocator: std.mem.Allocator, value: []const u8, detected: RedactionToken, filters_cfg: *const config.FiltersConfig) ![]const u8 {
     if (filters_cfg.pii_mode == .mask) {
         if (detected == .email) return maskEmail(allocator, value);
         if (detected == .phone) return maskPhone(allocator, value);
+    }
+    if (filters_cfg.pii_mode == .hash and (detected == .email or detected == .phone)) {
+        return hashValue(allocator, value);
     }
     return allocator.dupe(u8, detected.toString());
 }
@@ -351,6 +371,16 @@ fn filterAndRedactMetadataRecursive(
                                     }
                                     if (kt == .phone and isPhone(value.string)) {
                                         break :redact_blk try maskPhone(allocator, value.string);
+                                    }
+                                }
+                                // For key-based PII redaction with hashing, pseudonymize
+                                // detected email/phone values (GAP-050).
+                                if (filters_cfg.pii_mode == .hash and value == .string) {
+                                    if (kt == .email and isEmail(value.string)) {
+                                        break :redact_blk try hashValue(allocator, value.string);
+                                    }
+                                    if (kt == .phone and isPhone(value.string)) {
+                                        break :redact_blk try hashValue(allocator, value.string);
                                     }
                                 }
                                 break :redact_blk try allocator.dupe(u8, kt.toString());

@@ -944,3 +944,118 @@ test "filterAndRedactMetadata: non-object metadata is deep-copied, not aliased (
     json_util.freeJsonValue(allocator, original);
     json_util.freeJsonValue(allocator, filtered.?);
 }
+
+/// Helper for the pii_mode tests below: run filterAndRedactMetadata over a
+/// single-key string metadata object and return an owned copy of the
+/// resulting string value for that key.
+fn filterSingleString(
+    allocator: std.mem.Allocator,
+    filter_config: *const config.FiltersConfig,
+    key: []const u8,
+    value: []const u8,
+) ![]const u8 {
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, key, std.json.Value{ .string = value });
+
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit(allocator);
+        }
+    };
+
+    if (filtered == null or filtered.? != .object) return error.TestUnexpectedResult;
+    const out_val = filtered.?.object.get(key) orelse return error.TestUnexpectedResult;
+    if (out_val != .string) return error.TestUnexpectedResult;
+    return allocator.dupe(u8, out_val.string);
+}
+
+fn hashTestConfig() config.FiltersConfig {
+    return config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &.{},
+        .deny_key_patterns = &.{},
+        .pii_mode = .hash,
+        .pci_mode = false,
+    };
+}
+
+test "pii_mode hash: email value is deterministically pseudonymized (GAP-050)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const filter_config = hashTestConfig();
+
+    const first = try filterSingleString(allocator, &filter_config, "contact", "user@example.com");
+    defer allocator.free(first);
+
+    // "sha256:" prefix + 16 lowercase hex chars
+    try testing.expect(std.mem.startsWith(u8, first, "sha256:"));
+    try testing.expectEqual(@as(usize, 7 + 16), first.len);
+
+    // Deterministic: same input hashes to the same output across runs
+    const second = try filterSingleString(allocator, &filter_config, "contact", "user@example.com");
+    defer allocator.free(second);
+    try testing.expectEqualStrings(first, second);
+
+    // Different inputs hash to different outputs
+    const other = try filterSingleString(allocator, &filter_config, "contact", "other@example.com");
+    defer allocator.free(other);
+    try testing.expect(!std.mem.eql(u8, first, other));
+}
+
+test "pii_mode hash: phone value is deterministically pseudonymized (GAP-050)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const filter_config = hashTestConfig();
+
+    const first = try filterSingleString(allocator, &filter_config, "contact_no", "123-456-7890");
+    defer allocator.free(first);
+
+    try testing.expect(std.mem.startsWith(u8, first, "sha256:"));
+    try testing.expectEqual(@as(usize, 7 + 16), first.len);
+
+    const second = try filterSingleString(allocator, &filter_config, "contact_no", "123-456-7890");
+    defer allocator.free(second);
+    try testing.expectEqualStrings(first, second);
+
+    const other = try filterSingleString(allocator, &filter_config, "contact_no", "987-654-3210");
+    defer allocator.free(other);
+    try testing.expect(!std.mem.eql(u8, first, other));
+}
+
+test "pii_mode hash: key-token email path hashes instead of masking (GAP-050)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const filter_config = hashTestConfig();
+
+    // Key "email" matches isSensitiveKey; value is a real email.
+    const hashed = try filterSingleString(allocator, &filter_config, "email", "carol@example.com");
+    defer allocator.free(hashed);
+
+    try testing.expect(std.mem.startsWith(u8, hashed, "sha256:"));
+    try testing.expectEqual(@as(usize, 7 + 16), hashed.len);
+    // Must be hashed, never masked or fully redacted
+    try testing.expect(!std.mem.eql(u8, hashed, "***@example.com"));
+    try testing.expect(!std.mem.eql(u8, hashed, "[REDACTED_EMAIL]"));
+
+    // A sensitive key whose value is NOT a detectable email still falls back
+    // to the key-token redaction string (hashing only applies to detected PII).
+    const fallback = try filterSingleString(allocator, &filter_config, "email", "not-an-email");
+    defer allocator.free(fallback);
+    try testing.expectEqualStrings("[REDACTED_EMAIL]", fallback);
+}
