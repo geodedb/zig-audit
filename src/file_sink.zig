@@ -126,7 +126,11 @@ pub const FileSink = struct {
         try obj.put(self.allocator, "ts", std.json.Value{ .string = timestamp });
         try obj.put(self.allocator, "level", std.json.Value{ .string = "ERROR" });
         try obj.put(self.allocator, "msg", std.json.Value{ .string = error_msg });
-        const error_line = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
+        const json = try std.json.Stringify.valueAlloc(self.allocator, std.json.Value{ .object = obj }, .{});
+        // PR-006a: the enqueued line owns its trailing newline so the worker
+        // issues exactly one write per record.
+        const error_line = try self.allocator.realloc(json, json.len + 1);
+        error_line[error_line.len - 1] = '\n';
 
         return self.enqueueLine(error_line, "error messages");
     }
@@ -145,17 +149,17 @@ pub const FileSink = struct {
 
     /// Write a single line to the current file, handling rotation and fsync.
     /// Called only from the worker thread — no mutex needed.
+    /// PR-006a: `line` includes its trailing newline, so `line.len` is the
+    /// exact on-disk size and one `writeStreamingAll` covers the record.
     fn writeLine(self: *FileSink, line: []const u8) !void {
-        // QR-009: the write below appends line + "\n", so rotation must
-        // account for the newline byte too or the file can exceed max_bytes
-        // by one byte per line.
-        try self.checkRotation(line.len + 1);
+        // QR-009: rotation must trigger BEFORE any write that would push the
+        // file past max_bytes. The newline is part of line.len now.
+        try self.checkRotation(line.len);
 
         if (self.current_file) |file| {
             const io = systemIo();
             try file.writeStreamingAll(io, line);
-            try file.writeStreamingAll(io, "\n");
-            self.current_size += line.len + 1;
+            self.current_size += line.len;
             try self.maybeFsync(file);
         }
     }
@@ -255,7 +259,12 @@ pub const FileSink = struct {
         }
 
         const json_value = std.json.Value{ .object = json_obj };
-        return std.json.Stringify.valueAlloc(self.allocator, json_value, .{});
+        const json = try std.json.Stringify.valueAlloc(self.allocator, json_value, .{});
+        // PR-006a: the line owns its trailing newline so the worker issues
+        // exactly one write per record.
+        const line = try self.allocator.realloc(json, json.len + 1);
+        line[line.len - 1] = '\n';
+        return line;
     }
 
     fn checkRotation(self: *FileSink, additional_size: usize) !void {
@@ -503,14 +512,15 @@ test "QR-009: rotation size accounting includes the trailing newline" {
     try sink.openCurrentFile();
     try testing.expectEqual(@as(u64, 0), sink.current_size);
 
-    // 5 bytes + newline = 6 bytes on disk; fits in max_bytes = 10.
-    try sink.writeLine("12345");
+    // Lines carry their own trailing newline (PR-006a). 6 bytes on disk;
+    // fits in max_bytes = 10.
+    try sink.writeLine("12345\n");
     try testing.expectEqual(@as(u64, 6), sink.current_size);
 
-    // current_size (6) + line.len (4) == max_bytes exactly, but the newline
-    // makes the on-disk write 11 > 10. Rotation must trigger BEFORE this
-    // write so the file never exceeds max_bytes.
-    try sink.writeLine("1234");
+    // current_size (6) + line.len (5, newline included) = 11 > 10.
+    // Rotation must trigger BEFORE this write so the file never exceeds
+    // max_bytes.
+    try sink.writeLine("1234\n");
     try testing.expectEqual(@as(u64, 5), sink.current_size);
 
     // The pre-rotation file (6 bytes) must have been moved to the backup.
@@ -720,6 +730,68 @@ test "FileSink sync_mode periodic writes to file" {
         if (line.len > 0) line_count += 1;
     }
     try testing.expectEqual(@as(u32, 6), line_count);
+}
+
+test "PR-006a: on-disk content has exactly one newline per record and no blank lines" {
+    const testing = std.testing;
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+
+    const test_dir = "zig-out/tmp/test-pr006a-newlines";
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    const file_config = config.FileSinkConfig{
+        .enabled = true,
+        .path = test_dir ++ "/audit.log",
+        .max_bytes = 1048576,
+        .backup_count = 0,
+        .sync_mode = .none,
+    };
+
+    const sink = try FileSink.init(allocator, file_config, clock);
+
+    const record_count = 5;
+    var i: u32 = 0;
+    while (i < record_count) : (i += 1) {
+        const event = events.AuditEvent{
+            .category = "test",
+            .action = "newline_shape",
+            .outcome = .success,
+            .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+            .severity = .INFO,
+            .actor_id = "test-user",
+            .subject_id = null,
+            .request_id = null,
+            .session_id = null,
+            .source_ip = null,
+            .trace_id = null,
+            .span_id = null,
+            .metadata = null,
+        };
+        _ = try sink.write(&event, null);
+    }
+    // An error record goes through the same enqueue path and must keep the
+    // one-newline-per-record shape.
+    _ = try sink.writeError("boom");
+
+    sink.deinit();
+
+    const content = try cwd.readFileAlloc(io, test_dir ++ "/audit.log", allocator, .limited(1048576));
+    defer allocator.free(content);
+
+    // Exactly one '\n' per record, file ends with a newline, no blank lines.
+    try testing.expectEqual(@as(usize, record_count + 1), std.mem.count(u8, content, "\n"));
+    try testing.expect(content.len > 0 and content[content.len - 1] == '\n');
+    try testing.expect(content[0] != '\n');
+    try testing.expect(std.mem.indexOf(u8, content, "\n\n") == null);
 }
 
 test "GAP-063: fresh audit file has mode 0o640" {
