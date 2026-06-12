@@ -141,6 +141,16 @@ collector.
 Unix systems, restricting read access to the owner and group. Ensure the
 audit log directory has appropriate ownership and permissions.
 
+**File sink durability (`sync_mode`).** The file sink defaults to
+`"sync_mode": "per_event"` — an fsync after every write. This is a deliberate
+choice: for audit logs, durability comes first, so the default path is
+disk-latency-bound. If you need throughput and can tolerate losing the tail
+of the log on power loss or crash, opt in to `"periodic"` (fsync every
+`sync_interval` events, default 100) or `"none"` (leave flushing to the OS).
+For scale: in this repo's scale-bench, a batched worker with `"none"`
+measured roughly 13x faster on the file-sink path than the per-event
+default.
+
 ## Observability
 
 This library ships an optional OpenTelemetry seam, gated behind

@@ -85,8 +85,17 @@ pub const IdentityConfig = struct {
     cef: CefIdentityConfig,
 };
 
+/// Durability/throughput tradeoff for the file sink's fsync policy.
+///
+/// `.per_event` is the DELIBERATE default: this is an audit library, so
+/// durability comes first — every event is fsynced before `audit()` returns,
+/// making the file-sink path disk-latency-bound. `.periodic` and `.none` are
+/// explicit opt-ins for throughput: in this repo's scale-bench, a batched
+/// worker with `.none` measured ~13x faster on the file-sink path. Choose
+/// them only when losing the tail of the audit log on power loss / crash is
+/// an acceptable tradeoff.
 pub const SyncMode = enum {
-    per_event, // fsync after every write (safest, slowest)
+    per_event, // fsync after every write (safest, slowest; the default)
     periodic, // fsync every N events (default: 100)
     none, // no explicit fsync — let OS handle it
 
