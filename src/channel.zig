@@ -5,7 +5,7 @@
 //!
 //! Provides a fixed-capacity MPSC (multiple-producer, single-consumer) channel
 //! with blocking receive and close-with-drain semantics. Used by syslog and
-//! file sink workers to replace hand-rolled RingBuffer + external Mutex patterns.
+//! file sink workers to replace hand-rolled ring-buffer + external mutex patterns.
 
 const std = @import("std");
 const sync = @import("sync.zig");
