@@ -69,9 +69,15 @@ pub const AuditEvent = struct {
         EmptyAction,
         EmptyActorId,
         FieldTooLong,
+        InvalidCharacter,
     };
 
-    /// Validates required fields and length constraints on the audit event.
+    /// Validates required fields, length constraints, and character
+    /// constraints on the audit event. Core identity fields must not
+    /// contain ASCII control characters (0x00-0x1F, 0x7F) -- they are
+    /// rejected at the API boundary rather than relying on downstream
+    /// formatter escaping (GAP-047/A8). Metadata values are intentionally
+    /// NOT validated here; they are neutralized by the CEF escape layer.
     pub fn validate(self: *const AuditEvent) ValidateError!void {
         if (self.category.len == 0) return error.EmptyCategory;
         if (self.action.len == 0) return error.EmptyAction;
@@ -97,6 +103,22 @@ pub const AuditEvent = struct {
             if (maybe_field) |field| {
                 if (field.len > MAX_FIELD_LEN) return error.FieldTooLong;
             }
+        }
+
+        // Reject ASCII control characters in all core string fields.
+        for (string_fields) |field| {
+            try checkNoControlChars(field);
+        }
+        for (optional_fields) |maybe_field| {
+            if (maybe_field) |field| {
+                try checkNoControlChars(field);
+            }
+        }
+    }
+
+    fn checkNoControlChars(field: []const u8) ValidateError!void {
+        for (field) |c| {
+            if (c < 0x20 or c == 0x7F) return error.InvalidCharacter;
         }
     }
 
@@ -227,4 +249,39 @@ test "AuditEvent.validate: field at exactly 1024 bytes passes" {
     @memset(&max_field, 'a');
     event.category = &max_field;
     try event.validate();
+}
+
+test "AuditEvent.validate: control character in actor_id returns InvalidCharacter" {
+    var event = makeValidEvent();
+    event.actor_id = "user\x00name";
+    try std.testing.expectError(error.InvalidCharacter, event.validate());
+}
+
+test "AuditEvent.validate: control characters in core and optional fields return InvalidCharacter (GAP-047/A8)" {
+    const cases = [_]struct {
+        field: enum { category, action, actor_id, subject_id, request_id, session_id, source_ip },
+        value: []const u8,
+    }{
+        .{ .field = .category, .value = "au\x1Fth" },
+        .{ .field = .action, .value = "log\x07in" },
+        .{ .field = .actor_id, .value = "user\x7F" },
+        .{ .field = .subject_id, .value = "sub\x00ject" },
+        .{ .field = .request_id, .value = "req\x0A123" },
+        .{ .field = .session_id, .value = "ses\x0D999" },
+        .{ .field = .source_ip, .value = "1.2.3.4\x09" },
+    };
+
+    for (cases) |case| {
+        var event = makeValidEvent();
+        switch (case.field) {
+            .category => event.category = case.value,
+            .action => event.action = case.value,
+            .actor_id => event.actor_id = case.value,
+            .subject_id => event.subject_id = case.value,
+            .request_id => event.request_id = case.value,
+            .session_id => event.session_id = case.value,
+            .source_ip => event.source_ip = case.value,
+        }
+        try std.testing.expectError(error.InvalidCharacter, event.validate());
+    }
 }

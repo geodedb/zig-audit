@@ -215,6 +215,10 @@ fn escapeKey(allocator: std.mem.Allocator, s: []const u8) ![]const u8 {
 ///
 /// When `is_header` is false (extension values/keys): escapes `\` to `\\`,
 /// `=` to `\=`, `\n` to `\\n`, `\r` to `\\r`. `|` is NOT escaped in extensions.
+///
+/// All other C0 control bytes (0x00-0x1F) and DEL (0x7F) are neutralized to
+/// `\xNN` hex escapes in both modes (GAP-042/A3) so no raw control byte can
+/// reach a log sink and forge or corrupt records.
 pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_header: bool) ![]const u8 {
     var result = try std.ArrayList(u8).initCapacity(allocator, input.len + 16);
     errdefer result.deinit(allocator);
@@ -226,6 +230,11 @@ pub fn escapeCefString(allocator: std.mem.Allocator, input: []const u8, is_heade
             '=' => if (is_header) try result.append(allocator, c) else try result.appendSlice(allocator, "\\="),
             '\n' => if (!is_header) try result.appendSlice(allocator, "\\n") else try result.append(allocator, ' '),
             '\r' => if (!is_header) try result.appendSlice(allocator, "\\r") else try result.append(allocator, ' '),
+            0x00...0x09, 0x0B, 0x0C, 0x0E...0x1F, 0x7F => {
+                var hex_buf: [4]u8 = undefined;
+                const hex = std.fmt.bufPrint(&hex_buf, "\\x{x:0>2}", .{c}) catch unreachable;
+                try result.appendSlice(allocator, hex);
+            },
             else => try result.append(allocator, c),
         }
     }

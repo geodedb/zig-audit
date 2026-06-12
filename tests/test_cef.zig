@@ -320,3 +320,86 @@ test "CEF event name mapping" {
         try testing.expect(std.mem.indexOf(u8, cef_msg, expected_pattern) != null);
     }
 }
+
+fn expectNoRawControlBytes(s: []const u8) !void {
+    for (s) |c| {
+        // No raw C0 control bytes and no DEL may survive escaping.
+        try testing.expect(c >= 0x20 and c != 0x7F);
+    }
+}
+
+test "escapeCefString neutralizes control characters (GAP-042/A3)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Extension value: NUL, BEL, TAB, DEL must become \xNN escapes.
+    const ext = try cef.escapeCefString(allocator, "a\x00b\x07c\x09d\x7Fe", false);
+    defer allocator.free(ext);
+    try expectNoRawControlBytes(ext);
+    try testing.expect(std.mem.indexOf(u8, ext, "\\x00") != null);
+    try testing.expect(std.mem.indexOf(u8, ext, "\\x07") != null);
+    try testing.expect(std.mem.indexOf(u8, ext, "\\x09") != null);
+    try testing.expect(std.mem.indexOf(u8, ext, "\\x7f") != null);
+
+    // Newline/CR keep their existing readable escapes in extensions.
+    const nl = try cef.escapeCefString(allocator, "l1\nl2\rl3", false);
+    defer allocator.free(nl);
+    try testing.expectEqualStrings("l1\\nl2\\rl3", nl);
+
+    // Header field: control bytes are hex-escaped too (newlines stay spaces).
+    const hdr = try cef.escapeCefString(allocator, "v\x00en\x07dor\x7F\n", true);
+    defer allocator.free(hdr);
+    try expectNoRawControlBytes(hdr);
+    try testing.expect(std.mem.indexOf(u8, hdr, "\\x00") != null);
+    try testing.expect(std.mem.indexOf(u8, hdr, "\\x07") != null);
+    try testing.expect(std.mem.indexOf(u8, hdr, "\\x7f") != null);
+}
+
+test "formatCef emits no raw control bytes from header fields or metadata values (GAP-042/A3)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    const clock = fixed_clock.clock();
+
+    // Header field carrying a control byte.
+    const identity = config.CefIdentityConfig{
+        .vendor = "DEV\x01NW",
+        .product = "AUDIT",
+        .version = "0.1.0",
+    };
+
+    // Metadata values are intentionally NOT validated by AuditEvent.validate;
+    // they rely entirely on the CEF escape layer. Push control bytes through
+    // a metadata string value to prove the escape layer neutralizes them.
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "note", std.json.Value{ .string = "line\x00break\x07bell\x7Fdel" });
+
+    var event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = time.TEST_TIMESTAMP_MS,
+        .severity = .INFO,
+        .actor_id = "user\x07id",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = std.json.Value{ .object = metadata_obj },
+    };
+
+    const cef_msg = try cef.formatCef(allocator, &event, &identity, clock);
+    defer allocator.free(cef_msg);
+
+    try expectNoRawControlBytes(cef_msg);
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "\\x01") != null); // header vendor
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "\\x00") != null); // metadata value
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "\\x07") != null); // metadata + actor
+    try testing.expect(std.mem.indexOf(u8, cef_msg, "\\x7f") != null); // metadata value
+}
