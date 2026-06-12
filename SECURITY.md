@@ -39,8 +39,12 @@ Please include:
 
 This project implements:
 
-- **Memory Safety**: Zig's compile-time memory safety checks
-- **No Undefined Behavior**: Strict adherence to defined semantics
+- **Memory-Safety Process**: memory-safety findings are audited and fixed
+  under TDD, with `DebugAllocator`-based regression tests guarding against
+  leaks, double-frees, and use-after-free recurrences
+- **Runtime Safety Checks**: ReleaseSafe builds keep Zig's runtime safety
+  checks (bounds checks, integer-overflow checks, etc.) enabled; no
+  compile-time memory-safety guarantee is claimed
 - **Dependency Scanning**: Automated security scanning in CI
 - **Secret Detection**: Gitleaks scanning for leaked credentials
 

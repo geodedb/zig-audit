@@ -1,7 +1,7 @@
 # audit
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![Zig](https://img.shields.io/badge/Zig-0.15.1+-orange.svg)](https://ziglang.org/)
+[![Zig](https://img.shields.io/badge/Zig-0.16.0+-orange.svg)](https://ziglang.org/)
 
 A Zig library for audit
 
@@ -9,7 +9,9 @@ A Zig library for audit
 
 - **Minimal Dependencies**: Zig standard library plus a small DNS resolution library
 - **Memory Safe**: Proper allocation patterns with no leaks
-- **Cross-Platform**: Linux, macOS, Windows support
+- **Platform Support**: File sink is cross-platform (Linux, macOS, Windows).
+  The syslog transport is Linux-only today (it uses raw `std.os.linux` socket
+  syscalls); support for other platforms is tracked in issue #114
 - **Well Tested**: Comprehensive unit and integration tests
 
 ## Installation
@@ -213,7 +215,7 @@ for the full recipe.
 
 ## Requirements
 
-- Zig 0.15.1 or later
+- Zig 0.16.0 or later
 
 ## Building
 
