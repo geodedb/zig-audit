@@ -25,7 +25,12 @@ pub const AuditLogger = struct {
     id_gen: time.IdGen,
     syslog_sender: ?*syslog.SyslogSender,
     file_sink: ?*file_sink.FileSink,
+    // Owned only when constructed via buildAuditLogger; freed in deinit.
+    owned_system_clock: ?*time.SystemClock = null,
+    owned_system_id_gen: ?*time.SystemIdGen = null,
 
+    /// Takes ownership of `audit_config`; freed in `deinit()`. Do not call
+    /// `audit_config.deinit()` after a successful `init`.
     pub fn init(
         allocator: std.mem.Allocator,
         audit_config: config.Config,
@@ -71,6 +76,12 @@ pub const AuditLogger = struct {
         }
         if (self.file_sink) |sink| {
             sink.deinit();
+        }
+        if (self.owned_system_clock) |sc| {
+            self.allocator.destroy(sc);
+        }
+        if (self.owned_system_id_gen) |sig| {
+            self.allocator.destroy(sig);
         }
         self.config.deinit();
         self.allocator.destroy(self);
@@ -247,11 +258,60 @@ pub const AuditLogger = struct {
     }
 };
 
-pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: *const config.Config) !*AuditLogger {
-    var sys_clock = time.SystemClock{};
-    var sys_id_gen = time.SystemIdGen.init();
+/// Build an `AuditLogger` backed by the system clock and system ID
+/// generator. Takes ownership of `cfg`: the logger frees it in `deinit()`;
+/// the caller must not call `cfg.deinit()` after a successful return.
+///
+/// The `SystemClock`/`SystemIdGen` instances are heap-allocated and owned
+/// by the returned logger (freed in `deinit()`), so the vtable contexts
+/// remain valid for the logger's whole lifetime.
+pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: config.Config) !*AuditLogger {
+    const sys_clock = try allocator.create(time.SystemClock);
+    errdefer allocator.destroy(sys_clock);
+    sys_clock.* = time.SystemClock{};
 
-    return AuditLogger.init(allocator, cfg.*, sys_clock.clock(), sys_id_gen.idGen());
+    const sys_id_gen = try allocator.create(time.SystemIdGen);
+    errdefer allocator.destroy(sys_id_gen);
+    sys_id_gen.* = time.SystemIdGen.init();
+
+    const logger = try AuditLogger.init(allocator, cfg, sys_clock.clock(), sys_id_gen.idGen());
+    logger.owned_system_clock = sys_clock;
+    logger.owned_system_id_gen = sys_id_gen;
+    return logger;
+}
+
+test "buildAuditLogger: system idgen survives the builder frame (QR-001)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const test_config = try config.loadTestConfig(allocator);
+    const logger = try buildAuditLogger(allocator, test_config);
+    defer logger.deinit();
+
+    var buf1: [32]u8 = undefined;
+    var buf2: [32]u8 = undefined;
+    logger.id_gen.traceId(&buf1);
+    logger.id_gen.traceId(&buf2);
+    for (buf1) |c| try std.testing.expect(std.ascii.isHex(c));
+    try std.testing.expect(!std.mem.eql(u8, &buf1, &buf2));
+
+    const event = events.AuditEvent{
+        .category = "auth",
+        .action = "login",
+        .outcome = .success,
+        .ts_unix_ms = 0,
+        .severity = .INFO,
+        .actor_id = "u1",
+        .subject_id = null,
+        .request_id = null,
+        .session_id = null,
+        .source_ip = null,
+        .trace_id = null,
+        .span_id = null,
+        .metadata = null,
+    };
+    try logger.audit(&event);
 }
 
 test "estimateEventSize: small event stays under 8192" {

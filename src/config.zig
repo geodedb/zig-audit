@@ -141,6 +141,11 @@ pub const FiltersConfig = struct {
     pci_mode: bool,
 };
 
+/// Parsed configuration. OWNERSHIP: `AuditLogger.init`/`buildAuditLogger`
+/// take ownership of a `Config` passed to them — the logger calls
+/// `config.deinit()` in its own `deinit()`. Callers must NOT call `deinit()`
+/// on a Config after handing it to a logger, and must not retain copies
+/// (the struct embeds heap pointers).
 pub const Config = struct {
     version: u32,
     service: ServiceConfig,

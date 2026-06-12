@@ -13,8 +13,9 @@
 //! const audit = @import("audit");
 //!
 //! // Create a logger with file + syslog sinks
-//! var cfg = try audit.config.loadConfig(allocator, "audit.json");
-//! const logger = try audit.logger.buildAuditLogger(allocator, &cfg);
+//! const cfg = try audit.config.loadConfig(allocator, "audit.json");
+//! // The logger takes ownership of cfg and frees it in deinit().
+//! const logger = try audit.logger.buildAuditLogger(allocator, cfg);
 //! defer logger.deinit();
 //!
 //! // Emit an audit event

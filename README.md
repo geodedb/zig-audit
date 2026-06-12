@@ -48,10 +48,12 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     // Load configuration from a JSON file
-    var cfg = try audit.config.loadConfig(allocator, "audit.json");
+    const cfg = try audit.config.loadConfig(allocator, "audit.json");
 
-    // Create a logger with file + syslog sinks
-    const logger = try audit.logger.buildAuditLogger(allocator, &cfg);
+    // Create a logger with file + syslog sinks.
+    // The logger takes ownership of cfg and frees it in deinit();
+    // do not call cfg.deinit() after this point.
+    const logger = try audit.logger.buildAuditLogger(allocator, cfg);
     defer logger.deinit();
 
     // Emit an audit event
@@ -178,8 +180,9 @@ pub fn main() !void {
     otel.installGlobals();
     defer otel.deinit();
 
-    var cfg = try audit.config.loadConfig(gpa.allocator(), "audit.json");
-    const logger = try audit.logger.buildAuditLogger(gpa.allocator(), &cfg);
+    const cfg = try audit.config.loadConfig(gpa.allocator(), "audit.json");
+    // buildAuditLogger takes ownership of cfg; freed in logger.deinit().
+    const logger = try audit.logger.buildAuditLogger(gpa.allocator(), cfg);
     defer logger.deinit();
 
     try logger.audit(&.{
