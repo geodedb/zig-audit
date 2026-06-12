@@ -1295,3 +1295,33 @@ test "GAP-054 pinning: PAN under sensitive key redacts to card token; email unde
     const expected = try std.fmt.bufPrint(&expected_buf, "sha256:{s}", .{hex});
     try testing.expectEqualStrings(expected, obj.get("internal_contact").?.string);
 }
+
+test "drop_event frees entries inserted before the dropping field (E1 review)" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    var allow_fields = [_][]const u8{"safe_field"};
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &allow_fields,
+        .deny_key_patterns = &.{},
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    const pem = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAy8Dbq...\n-----END RSA PRIVATE KEY-----";
+
+    // "safe_field" is processed first (.allow inserts a duped key + cloned
+    // value into the filtered map), then "private_key" triggers drop_event.
+    // Before the fix, the bare map deinit leaked the safe_field entry;
+    // the DebugAllocator leak check on gpa.deinit() is the oracle.
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "safe_field", std.json.Value{ .string = "some value" });
+    try metadata_obj.put(allocator, "private_key", std.json.Value{ .string = pem });
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    const filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    try testing.expect(filtered == null);
+}

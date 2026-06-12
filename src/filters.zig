@@ -348,7 +348,10 @@ fn filterAndRedactMetadataRecursive(
     return switch (metadata) {
         .object => |obj| blk: {
             var filtered_map: std.json.ObjectMap = .empty;
-            errdefer filtered_map.deinit(allocator);
+            // Free entries (duped keys + allocated values), not just the
+            // backing storage — a bare deinit leaks everything inserted
+            // before a mid-iteration failure.
+            errdefer json_util.freeJsonValue(allocator, std.json.Value{ .object = filtered_map });
 
             var iter = obj.iterator();
             while (iter.next()) |entry| {
@@ -359,7 +362,10 @@ fn filterAndRedactMetadataRecursive(
                 switch (filter_result) {
                     .allow => {
                         const processed_value = try redactValueRecursive(allocator, value, filters_cfg, depth + 1);
-                        try filtered_map.put(allocator, try allocator.dupe(u8, key), processed_value);
+                        errdefer json_util.freeJsonValue(allocator, processed_value);
+                        const dup_key = try allocator.dupe(u8, key);
+                        errdefer allocator.free(dup_key);
+                        try filtered_map.put(allocator, dup_key, processed_value);
                     },
                     .redact => |redaction| {
                         // Determine the redacted string, applying masking when pii_mode == .mask.
@@ -398,11 +404,15 @@ fn filterAndRedactMetadataRecursive(
                             }
                             break :redact_blk try allocator.dupe(u8, "[REDACTED]");
                         };
-                        const redacted = std.json.Value{ .string = redacted_str };
-                        try filtered_map.put(allocator, try allocator.dupe(u8, key), redacted);
+                        errdefer allocator.free(redacted_str);
+                        const dup_key = try allocator.dupe(u8, key);
+                        errdefer allocator.free(dup_key);
+                        try filtered_map.put(allocator, dup_key, std.json.Value{ .string = redacted_str });
                     },
                     .drop_event => {
-                        filtered_map.deinit(allocator);
+                        // Free entries inserted before the drop, not just the
+                        // backing storage (pre-existing leak found in E1 review).
+                        json_util.freeJsonValue(allocator, std.json.Value{ .object = filtered_map });
                         return null;
                     },
                 }
