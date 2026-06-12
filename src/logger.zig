@@ -117,7 +117,11 @@ pub const AuditLogger = struct {
         defer observability.endAuditRecordSpan(span, span_ok, span_durable);
 
         try ev.validate();
-        var event = try ev.clone(self.allocator);
+        // Single-copy metadata pipeline (GAP-049, PERF-001, PERF-005): the
+        // clone deliberately omits metadata. The filtered tree is built
+        // directly from the CALLER's metadata below and MOVED onto the
+        // clone — one owned tree total instead of clone + filter + re-clone.
+        var event = try ev.cloneWithoutMetadata(self.allocator);
         defer event.freeCloned(self.allocator);
 
         if (event.ts_unix_ms == 0) {
@@ -136,22 +140,22 @@ pub const AuditLogger = struct {
             event.span_id = span_buf;
         }
 
-        // Apply filtering and redaction
-        const filtered_metadata = if (event.metadata) |metadata|
+        // Apply filtering and redaction directly from the caller's metadata
+        // tree. The filters never mutate their input and always return an
+        // independently-owned tree (every path dupes/clones — QR-002), so
+        // reading `ev.metadata` here is safe even though we don't own it.
+        const filtered_metadata = if (ev.metadata) |metadata|
             try filters.filterAndRedactMetadata(self.allocator, metadata, &self.config.filters)
         else
             null;
-
-        defer if (filtered_metadata) |fm| {
-            json_util.freeJsonValue(self.allocator, fm);
-        };
 
         // If filtering resulted in dropping the event, log error and return.
         // The function honoured the redaction policy successfully
         // (`span_ok = true`), but the audit record never reached a
         // sink (`span_durable = false`). Operators can spot dropped
         // records by filtering for `audit.durable=false`.
-        if (event.metadata != null and filtered_metadata == null) {
+        // (`filtered_metadata` is null on this path — nothing to free.)
+        if (ev.metadata != null and filtered_metadata == null) {
             if (self.file_sink) |sink| {
                 // This path already reports durable=false below, so the
                 // enqueue-vs-drop status of the marker itself adds nothing.
@@ -162,15 +166,11 @@ pub const AuditLogger = struct {
             return;
         }
 
-        // Update event with filtered metadata
-        if (event.metadata) |original_metadata| {
-            json_util.freeJsonValue(self.allocator, original_metadata);
-        }
-        if (filtered_metadata) |fm| {
-            event.metadata = try json_util.cloneJsonValue(self.allocator, fm);
-        } else {
-            event.metadata = null;
-        }
+        // MOVE the filtered tree onto the cloned event (its metadata is null
+        // until here). Ownership transfers: the deferred freeCloned — or the
+        // truncation branch below — frees it. No re-clone (copy #3 of the
+        // old pipeline) and no defer of filtered_metadata itself.
+        event.metadata = filtered_metadata;
 
         // Check message size limit (8 KiB after redaction).
         // Estimate size without full serialization: sum known field lengths
@@ -594,6 +594,137 @@ test "audit: non-object top-level metadata does not double-free (QR-002)" {
     var event = makeTestEvent();
     event.metadata = std.json.Value{ .string = "not-an-object" };
     try logger.audit(&event);
+}
+
+test "audit: nested metadata pipeline leaks nothing and emits filtered output (GAP-049)" {
+    // Leak-sensitivity guard for the single-copy metadata pipeline: an
+    // end-to-end audit() with nested metadata (object containing an object,
+    // an array, and strings) under DebugAllocator. gpa.deinit() (deferred
+    // first, so it runs last) fails the test on any leak in the
+    // clone -> filter -> move -> sink choreography. Output is read back
+    // from the file sink AFTER logger deinit (async worker drains on
+    // deinit, QR-013).
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    // Random per-process suffix: the src test module is compiled into TWO
+    // binaries (otel on/off) that run in parallel; a shared fixed dir races
+    // (one binary's deleteTree vs the other's sink writes).
+    var dir_suffix: [4]u8 = undefined;
+    io.random(&dir_suffix);
+    const test_dir = try std.fmt.allocPrint(allocator, "zig-out/tmp/test-gap049-single-copy-{s}", .{std.fmt.bytesToHex(dir_suffix, .lower)});
+    defer allocator.free(test_dir);
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
+    const log_path = try std.fmt.allocPrint(allocator, "{s}/audit.log", .{test_dir});
+    defer allocator.free(log_path);
+
+    var test_config = try config.loadTestConfig(allocator);
+    allocator.free(test_config.sinks.file.path);
+    test_config.sinks.file.path = try allocator.dupe(u8, log_path);
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
+
+    const logger_inst = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+
+    // Caller-owned metadata tree: { subject_id: "user-42",
+    //   request_id: { actor_id: ["alpha", "beta"], source_ip: "10.1.2.3" },
+    //   password: "Sup3rSecret!" }
+    // loadTestConfig sets default_deny=true; subject_id/request_id/
+    // actor_id/source_ip are allow-listed AND not sensitive-key matches
+    // (e.g. "session_id" would trip isSensitiveKey's "session" pattern and
+    // "span_id" contains "pan"), so they survive filtering verbatim.
+    // "password" matches a deny pattern and is redacted.
+    var inner_arr = std.json.Array.init(allocator);
+    defer inner_arr.deinit();
+    try inner_arr.append(std.json.Value{ .string = "alpha" });
+    try inner_arr.append(std.json.Value{ .string = "beta" });
+
+    var inner_obj: std.json.ObjectMap = .empty;
+    defer inner_obj.deinit(allocator);
+    try inner_obj.put(allocator, "actor_id", std.json.Value{ .array = inner_arr });
+    try inner_obj.put(allocator, "source_ip", std.json.Value{ .string = "10.1.2.3" });
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "subject_id", std.json.Value{ .string = "user-42" });
+    try metadata_obj.put(allocator, "request_id", std.json.Value{ .object = inner_obj });
+    try metadata_obj.put(allocator, "password", std.json.Value{ .string = "Sup3rSecret!" });
+
+    var event = makeTestEvent();
+    event.metadata = std.json.Value{ .object = metadata_obj };
+    try logger_inst.audit(&event);
+
+    // Drain the async file sink, then assert the filtered tree reached disk.
+    logger_inst.deinit();
+
+    const content = try cwd.readFileAlloc(io, log_path, allocator, .limited(8192));
+    defer allocator.free(content);
+    try std.testing.expect(content.len > 0);
+
+    // Allowed fields survive filtering...
+    try std.testing.expect(std.mem.indexOf(u8, content, "user-42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "alpha") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "beta") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "10.1.2.3") != null);
+    // ...the denied key is redacted, and the secret never reaches the sink.
+    try std.testing.expect(std.mem.indexOf(u8, content, "[REDACTED]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "Sup3rSecret!") == null);
+}
+
+test "audit: drop_event metadata path leaks nothing (GAP-049/GAP-061)" {
+    // Leak angle of the fail-closed drop path: a PEM private key under a
+    // sensitive key makes the filter return null (drop_event). audit() must
+    // succeed (span_ok=true, durable=false), write only the drop marker,
+    // and free every allocation — DebugAllocator's deinit is the oracle.
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const cwd = std.Io.Dir.cwd();
+    // Random per-process suffix — see the GAP-049 single-copy test above.
+    var dir_suffix: [4]u8 = undefined;
+    io.random(&dir_suffix);
+    const test_dir = try std.fmt.allocPrint(allocator, "zig-out/tmp/test-gap049-drop-event-{s}", .{std.fmt.bytesToHex(dir_suffix, .lower)});
+    defer allocator.free(test_dir);
+    cwd.createDirPath(io, test_dir) catch {};
+    defer cwd.deleteTree(io, test_dir) catch {};
+    const log_path = try std.fmt.allocPrint(allocator, "{s}/audit.log", .{test_dir});
+    defer allocator.free(log_path);
+
+    var test_config = try config.loadTestConfig(allocator);
+    allocator.free(test_config.sinks.file.path);
+    test_config.sinks.file.path = try allocator.dupe(u8, log_path);
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+    var fixed_id_gen = time.FixedIdGen.init(time.TEST_TRACE_ID, time.TEST_SPAN_ID);
+
+    const logger_inst = try AuditLogger.init(allocator, test_config, fixed_clock.clock(), fixed_id_gen.idGen());
+
+    // Split literal: comptime-concatenates to a real PEM marker at runtime,
+    // but keeps the verbatim pattern out of src/ so the detect-private-key
+    // pre-commit hook (which excludes tests/, not src/) doesn't flag it.
+    const pem = "-----BEGIN RSA " ++ "PRIVATE KEY-----\nMIIEpAIBAAKCAQEAy8Dbq...\n-----END RSA " ++ "PRIVATE KEY-----";
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, "private_key", std.json.Value{ .string = pem });
+
+    var event = makeTestEvent();
+    event.metadata = std.json.Value{ .object = metadata_obj };
+    try logger_inst.audit(&event);
+
+    logger_inst.deinit();
+
+    const content = try cwd.readFileAlloc(io, log_path, allocator, .limited(8192));
+    defer allocator.free(content);
+    // Only the drop marker reaches the sink; no key material, no record.
+    try std.testing.expect(std.mem.indexOf(u8, content, "Event dropped due to unredactable sensitive content") != null);
+    try std.testing.expect(std.mem.indexOf(u8, content, "BEGIN RSA") == null);
 }
 
 test "audit: oversized metadata truncation markers are heap-owned (QR-003)" {

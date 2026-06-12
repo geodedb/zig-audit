@@ -137,7 +137,10 @@ pub const AuditEvent = struct {
         }
     }
 
-    pub fn clone(self: *const AuditEvent, allocator: std.mem.Allocator) !AuditEvent {
+    /// Shared string-dupe core of `clone` / `cloneWithoutMetadata`: deep-copy
+    /// every string field and copy the scalar fields, leaving `metadata`
+    /// null. On error, everything duped so far is released.
+    fn cloneStrings(self: *const AuditEvent, allocator: std.mem.Allocator) !AuditEvent {
         const cat = try allocator.dupe(u8, self.category);
         errdefer allocator.free(cat);
 
@@ -159,11 +162,6 @@ pub const AuditEvent = struct {
         const sip = if (self.source_ip) |s| try allocator.dupe(u8, s) else null;
         errdefer if (sip) |s| allocator.free(s);
 
-        var cloned_metadata: ?std.json.Value = null;
-        if (self.metadata) |metadata| {
-            cloned_metadata = try json_util.cloneJsonValue(allocator, metadata);
-        }
-
         return AuditEvent{
             .category = cat,
             .action = act,
@@ -177,8 +175,29 @@ pub const AuditEvent = struct {
             .source_ip = sip,
             .trace_id = self.trace_id,
             .span_id = self.span_id,
-            .metadata = cloned_metadata,
+            .metadata = null,
         };
+    }
+
+    pub fn clone(self: *const AuditEvent, allocator: std.mem.Allocator) !AuditEvent {
+        var cloned = try self.cloneStrings(allocator);
+        // Frees the duped strings if the metadata clone fails; `cloned.metadata`
+        // is still null at that point, so freeCloned touches nothing else.
+        errdefer cloned.freeCloned(allocator);
+
+        if (self.metadata) |metadata| {
+            cloned.metadata = try json_util.cloneJsonValue(allocator, metadata);
+        }
+
+        return cloned;
+    }
+
+    /// Like `clone`, but does not copy `metadata` (left null). The logger
+    /// derives the event's metadata from the original via the redaction
+    /// filter and attaches the filtered tree directly (single-copy
+    /// pipeline, GAP-049/PERF-001/PERF-005).
+    pub fn cloneWithoutMetadata(self: *const AuditEvent, allocator: std.mem.Allocator) !AuditEvent {
+        return self.cloneStrings(allocator);
     }
 
     pub fn freeCloned(self: *AuditEvent, allocator: std.mem.Allocator) void {
