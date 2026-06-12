@@ -146,7 +146,10 @@ pub const FileSink = struct {
     /// Write a single line to the current file, handling rotation and fsync.
     /// Called only from the worker thread — no mutex needed.
     fn writeLine(self: *FileSink, line: []const u8) !void {
-        try self.checkRotation(line.len);
+        // QR-009: the write below appends line + "\n", so rotation must
+        // account for the newline byte too or the file can exceed max_bytes
+        // by one byte per line.
+        try self.checkRotation(line.len + 1);
 
         if (self.current_file) |file| {
             const io = systemIo();
@@ -466,6 +469,47 @@ test "file sink rotation" {
         break :blk true;
     };
     try testing.expect(backup1_exists);
+}
+
+test "QR-009: rotation size accounting includes the trailing newline" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var fixed_clock = time.FixedClock.init(time.TEST_TIMESTAMP_MS);
+
+    const io = systemIo();
+    const cwd = std.Io.Dir.cwd();
+    const test_dir = "zig-out/tmp/test-qr009-rotate";
+    defer cwd.deleteTree(io, test_dir) catch {};
+
+    // Worker-less sink: call writeLine directly for determinism.
+    var sink = try FileSink.testInitWorkerless(allocator, .{
+        .enabled = true,
+        .path = test_dir ++ "/audit.log",
+        .max_bytes = 10,
+        .backup_count = 1,
+    }, fixed_clock.clock());
+    defer {
+        if (sink.current_file) |file| file.close(io);
+        sink.ch.deinit();
+    }
+
+    try sink.openCurrentFile();
+    try testing.expectEqual(@as(u64, 0), sink.current_size);
+
+    // 5 bytes + newline = 6 bytes on disk; fits in max_bytes = 10.
+    try sink.writeLine("12345");
+    try testing.expectEqual(@as(u64, 6), sink.current_size);
+
+    // current_size (6) + line.len (4) == max_bytes exactly, but the newline
+    // makes the on-disk write 11 > 10. Rotation must trigger BEFORE this
+    // write so the file never exceeds max_bytes.
+    try sink.writeLine("1234");
+    try testing.expectEqual(@as(u64, 5), sink.current_size);
+
+    // The pre-rotation file (6 bytes) must have been moved to the backup.
+    const backup_stat = try cwd.statFile(io, test_dir ++ "/audit.log.1", .{});
+    try testing.expectEqual(@as(u64, 6), backup_stat.size);
 }
 
 test "FileSink sync_mode per_event is default" {
