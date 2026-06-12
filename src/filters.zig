@@ -526,6 +526,12 @@ fn shouldFilterField(allocator: std.mem.Allocator, key: []const u8, value: std.j
             // below and redactValueRecursive for nested values) is redacted
             // to [REDACTED_PK] instead — the key carries no sensitive
             // intent, so the rest of the event is presumed safe to keep.
+            //
+            // Deliberately NOT folded into value_token: detectValueType's
+            // detector ordering could shadow .private_key behind an earlier
+            // match, and this drop is a security control that must not
+            // depend on detector precedence. isPemPrivateKey is a cheap
+            // prefix check, so the extra call costs nothing material.
             if (isPemPrivateKey(value.string)) {
                 return .drop_event;
             }

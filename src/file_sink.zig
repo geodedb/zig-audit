@@ -187,18 +187,23 @@ pub const FileSink = struct {
         }
 
         write_buf.clearRetainingCapacity();
+        var buffered_count: usize = 0;
         for (lines) |line| {
             defer self.allocator.free(line);
             self.bufferLine(write_buf, line) catch |err| {
                 log.warn("file sink write error: {s}", .{@errorName(err)});
+                continue;
             };
+            buffered_count += 1;
         }
         self.flushBuffer(write_buf) catch |err| {
             log.warn("file sink write error: {s}", .{@errorName(err)});
         };
 
         if (self.current_file) |file| {
-            self.maybeFsyncBatch(file, lines.len) catch |err| {
+            // Count only lines that were actually buffered for writing so the
+            // periodic fsync interval tracks records on disk, not attempts.
+            self.maybeFsyncBatch(file, buffered_count) catch |err| {
                 log.warn("file sink fsync error: {s}", .{@errorName(err)});
             };
         }
