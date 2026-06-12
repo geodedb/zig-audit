@@ -166,6 +166,12 @@ def _parse_dep_entries(deps_block: str) -> List[Tuple[str, str, str | None]]:
     return out
 
 
+# Package hashes are used as path components; restrict to a safe charset
+# so a hostile/corrupt build.zig.zon cannot smuggle separators (`/`, `..`
+# alone is still matched but cannot escape: no slash) into the path join.
+_PKG_HASH_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
 def _zon_path_for_hash(
     project_root: Path, zig_global_cache: Path, pkg_hash: str
 ) -> Path | None:
@@ -175,6 +181,12 @@ def _zon_path_for_hash(
     in `$ZIG_GLOBAL_CACHE_DIR/p/<pkg_hash>.tar.gz` (global).  Only the
     project-local extraction has a usable `build.zig.zon` on disk —
     we don't want to untar the global cache here."""
+    if not _PKG_HASH_RE.match(pkg_hash):
+        raise ValueError(
+            f"detect-diamond-deps: refusing to use package hash {pkg_hash!r} "
+            "as a path component — it contains characters outside "
+            "[A-Za-z0-9._-]; the build.zig.zon is malformed or hostile"
+        )
     candidate = project_root / "zig-pkg" / pkg_hash / "build.zig.zon"
     if candidate.exists():
         return candidate

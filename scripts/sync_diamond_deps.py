@@ -238,6 +238,13 @@ def rewrite_pin(
     bound the block by the next dep marker, then replace the first .url/.hash
     inside it.
     """
+    for label, val in (("url", new_url), ("hash", new_hash)):
+        if '"' in val or "\n" in val or "\r" in val:
+            raise ValueError(
+                f"rewrite_pin: refusing to substitute new_{label} {val!r} — "
+                "it contains a double quote or newline, which would corrupt "
+                "the build.zig.zon string literal"
+            )
     marker = re.search(r"\." + re.escape(field_name) + r"\s*=\s*\.\{", zon_text)
     if not marker:
         return zon_text, 0
@@ -352,8 +359,20 @@ class Bumped:
 
 def parse_target(spec: str) -> tuple[str, str, str]:
     # tls=v0.1.9#<commit>
+    if "=" not in spec or "#" not in spec.split("=", 1)[1]:
+        log(
+            f"sync-diamond: malformed --target {spec!r} — expected "
+            "<pkg>=<ref>#<commit> (e.g. tls=v0.1.9#0cbbf1a4f0389c46ddde6947979c62d7afbcf076)"
+        )
+        sys.exit(2)
     name, rest = spec.split("=", 1)
     ref, commit = rest.split("#", 1)
+    if not name or not ref or not commit:
+        log(
+            f"sync-diamond: malformed --target {spec!r} — pkg, ref, and "
+            "commit must all be non-empty (<pkg>=<ref>#<commit>)"
+        )
+        sys.exit(2)
     return name, ref, commit
 
 
