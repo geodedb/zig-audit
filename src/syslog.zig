@@ -241,10 +241,13 @@ pub const SyslogSender = struct {
     /// Resolve or return the cached address, re-resolving when the DNS TTL expires.
     fn resolveOrCached(self: *SyslogSender) !Ip4Addr {
         const now_i128 = self.clock.nowMs();
-        // Safe truncation: millisecond timestamps fit in i64 for the foreseeable future
-        const now_ms: i64 = @intCast(now_i128);
+        // QR-010: saturate instead of @intCast — a broken or hostile clock
+        // outside i64 milliseconds (~±292 million years) must degrade to a
+        // spurious re-resolve, never panic the syslog worker.
+        const now_ms: i64 = std.math.cast(i64, now_i128) orelse
+            (if (now_i128 > 0) std.math.maxInt(i64) else std.math.minInt(i64));
         const elapsed = now_ms -| self.last_dns_resolve_ms;
-        if (self.resolved_addr != null and elapsed >= 0 and elapsed < self.dns_cache_ttl_ms) {
+        if (self.resolved_addr != null and elapsed >= 0 and elapsed < @as(i64, self.dns_cache_ttl_ms)) {
             return self.resolved_addr.?;
         }
         const addr = try resolveHostToAddress(self.allocator, self.config.host, self.config.port);
@@ -605,6 +608,48 @@ test "SyslogSender resolveOrCached caches address" {
     try std.testing.expect(sender.last_dns_resolve_ms != 0);
 
     // Second call returns cached (same address)
+    const addr2 = try sender.resolveOrCached();
+    try std.testing.expect(addr1.eqlData(addr2));
+}
+
+test "QR-010: resolveOrCached saturates an absurd i128 clock instead of panicking" {
+    const allocator = std.testing.allocator;
+
+    // A clock past i64 milliseconds (~292 million years). The old
+    // @intCast(now_i128) panicked here in safe builds.
+    var fixed_clock = time.FixedClock.init(@as(i128, std.math.maxInt(i64)) + 1_000_000);
+    const clock = fixed_clock.clock();
+
+    const syslog_config = config.SyslogSinkConfig{
+        .enabled = false,
+        .protocol = .udp,
+        .host = "127.0.0.1", // IP literal avoids actual DNS
+        .port = 514,
+        .rfc5424 = config.SyslogRfc5424Config{
+            .facility = .local0,
+        },
+    };
+
+    const service_config = config.ServiceConfig{
+        .name = "test",
+        .host = "test-host",
+        .pid = 1,
+    };
+
+    const identity_config = config.CefIdentityConfig{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    };
+
+    const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
+    defer sender.deinit();
+
+    // Must not panic; the timestamp saturates to maxInt(i64).
+    const addr1 = try sender.resolveOrCached();
+    try std.testing.expectEqual(@as(i64, std.math.maxInt(i64)), sender.last_dns_resolve_ms);
+
+    // A second call at the same (saturated) time hits the cache: elapsed == 0.
     const addr2 = try sender.resolveOrCached();
     try std.testing.expect(addr1.eqlData(addr2));
 }
