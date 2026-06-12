@@ -30,6 +30,55 @@ test "sensitive key detection" {
     try testing.expect(filters.isSensitiveKey(testing.allocator, "timestamp") == null);
 }
 
+test "QR-011: sensitive keys longer than 256 bytes are still redacted" {
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // 300-char key ending in "password" — the old implementation lowercased
+    // into a 256-byte stack buffer and returned null (fail-open) for
+    // anything longer.
+    var long_key_buf: [300]u8 = undefined;
+    @memset(&long_key_buf, 'x');
+    @memcpy(long_key_buf[300 - "Password".len ..], "Password");
+    const long_key: []const u8 = &long_key_buf;
+
+    try testing.expect(filters.isSensitiveKey(testing.allocator, long_key) == .password);
+
+    // End-to-end: with a permissive config (no default deny, no deny
+    // patterns) only isSensitiveKey stands between the value and the sink —
+    // the long key must still come out redacted.
+    const filter_config = config.FiltersConfig{
+        .default_deny = false,
+        .allow_fields = &.{},
+        .deny_key_patterns = &.{},
+        .pii_mode = .off,
+        .pci_mode = false,
+    };
+
+    var metadata_obj: std.json.ObjectMap = .empty;
+    defer metadata_obj.deinit(allocator);
+    try metadata_obj.put(allocator, long_key, std.json.Value{ .string = "hunter2" });
+    const metadata = std.json.Value{ .object = metadata_obj };
+
+    var filtered = try filters.filterAndRedactMetadata(allocator, metadata, &filter_config);
+    defer if (filtered) |*f| {
+        if (f.* == .object) {
+            var obj_mut = &f.object;
+            var iter = obj_mut.iterator();
+            while (iter.next()) |entry| {
+                allocator.free(entry.key_ptr.*);
+                json_util.freeJsonValue(allocator, entry.value_ptr.*);
+            }
+            obj_mut.deinit(allocator);
+        }
+    };
+
+    try testing.expect(filtered != null);
+    const value = filtered.?.object.get(long_key) orelse return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("[REDACTED]", value.string);
+}
+
 test "JWT detection" {
     try testing.expect(filters.isJwt("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"));
     try testing.expect(filters.isJwt("a.b.c"));

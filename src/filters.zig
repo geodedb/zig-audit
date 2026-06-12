@@ -43,65 +43,64 @@ pub const RedactionToken = enum {
 };
 
 pub fn isSensitiveKey(allocator: std.mem.Allocator, key: []const u8) ?RedactionToken {
-    _ = allocator; // no longer needed; lowercase conversion uses stack buffer
-    var buf: [256]u8 = undefined;
-    if (key.len > buf.len) return null; // oversized keys are not sensitive
-    const lower_key = buf[0..key.len];
-    for (key, 0..) |c, i| {
-        lower_key[i] = std.ascii.toLower(c);
-    }
+    _ = allocator; // retained for API stability; matching needs no allocation
+    // QR-011: match patterns case-insensitively against the key directly
+    // (same approach as the deny-pattern loop in shouldFilterField). The
+    // previous implementation lowercased into a 256-byte stack buffer and
+    // returned null for longer keys — failing OPEN on oversized keys.
+    const contains = std.ascii.indexOfIgnoreCase;
 
     // Password-related
-    if (std.mem.indexOf(u8, lower_key, "password") != null or
-        std.mem.indexOf(u8, lower_key, "passwd") != null or
-        std.mem.indexOf(u8, lower_key, "passphrase") != null) return .password;
+    if (contains(key, "password") != null or
+        contains(key, "passwd") != null or
+        contains(key, "passphrase") != null) return .password;
 
     // Token-related
-    if (std.mem.indexOf(u8, lower_key, "token") != null or
-        std.mem.indexOf(u8, lower_key, "apikey") != null or
-        std.mem.indexOf(u8, lower_key, "api_key") != null) return .token;
+    if (contains(key, "token") != null or
+        contains(key, "apikey") != null or
+        contains(key, "api_key") != null) return .token;
 
     // Secret/credential/auth-related
-    if (std.mem.indexOf(u8, lower_key, "secret") != null or
-        std.mem.indexOf(u8, lower_key, "credential") != null or
-        std.mem.indexOf(u8, lower_key, "bearer") != null or
-        std.mem.indexOf(u8, lower_key, "authorization") != null or
-        std.mem.indexOf(u8, lower_key, "access_key") != null) return .token;
+    if (contains(key, "secret") != null or
+        contains(key, "credential") != null or
+        contains(key, "bearer") != null or
+        contains(key, "authorization") != null or
+        contains(key, "access_key") != null) return .token;
 
     // JWT
-    if (std.mem.indexOf(u8, lower_key, "jwt") != null) return .jwt;
+    if (contains(key, "jwt") != null) return .jwt;
 
     // Payment card
-    if (std.mem.indexOf(u8, lower_key, "card") != null or
-        std.mem.indexOf(u8, lower_key, "cc") != null or
-        std.mem.indexOf(u8, lower_key, "pan") != null) return .card;
+    if (contains(key, "card") != null or
+        contains(key, "cc") != null or
+        contains(key, "pan") != null) return .card;
 
     // Banking PIN
-    if (std.mem.indexOf(u8, lower_key, "pin") != null) return .card;
+    if (contains(key, "pin") != null) return .card;
 
     // CVV
-    if (std.mem.indexOf(u8, lower_key, "cvv") != null or
-        std.mem.indexOf(u8, lower_key, "cvc") != null) return .cvv;
+    if (contains(key, "cvv") != null or
+        contains(key, "cvc") != null) return .cvv;
 
     // SSN/SIN/NIN
-    if (std.mem.indexOf(u8, lower_key, "ssn") != null or
-        std.mem.indexOf(u8, lower_key, "sin") != null or
-        std.mem.indexOf(u8, lower_key, "nin") != null) return .ssn;
+    if (contains(key, "ssn") != null or
+        contains(key, "sin") != null or
+        contains(key, "nin") != null) return .ssn;
 
     // IBAN
-    if (std.mem.indexOf(u8, lower_key, "iban") != null) return .iban;
+    if (contains(key, "iban") != null) return .iban;
 
     // Private keys
-    if (std.mem.indexOf(u8, lower_key, "private_key") != null or
-        std.mem.indexOf(u8, lower_key, "privkey") != null) return .private_key;
+    if (contains(key, "private_key") != null or
+        contains(key, "privkey") != null) return .private_key;
 
     // PII
-    if (std.mem.indexOf(u8, lower_key, "email") != null) return .email;
-    if (std.mem.indexOf(u8, lower_key, "phone") != null) return .phone;
+    if (contains(key, "email") != null) return .email;
+    if (contains(key, "phone") != null) return .phone;
 
     // Session/cookie
-    if (std.mem.indexOf(u8, lower_key, "cookie") != null or
-        std.mem.indexOf(u8, lower_key, "session") != null) return .token;
+    if (contains(key, "cookie") != null or
+        contains(key, "session") != null) return .token;
 
     return null;
 }
