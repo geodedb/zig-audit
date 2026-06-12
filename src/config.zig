@@ -96,7 +96,10 @@ pub const IdentityConfig = struct {
 /// an acceptable tradeoff.
 pub const SyncMode = enum {
     per_event, // fsync after every write (safest, slowest; the default)
-    periodic, // fsync every N events (default: 100)
+    // fsync once >= N records written (default: 100). The threshold is
+    // checked at worker batch boundaries, so under bursts the fsync may
+    // land a few records past N (never before).
+    periodic,
     none, // no explicit fsync — let OS handle it
 
     pub fn fromString(s: []const u8) !SyncMode {

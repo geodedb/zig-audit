@@ -230,6 +230,14 @@ pub const FileSink = struct {
         if (self.current_file) |file| {
             try file.writeStreamingAll(systemIo(), write_buf.items);
             self.current_size += write_buf.items.len;
+        } else {
+            // No open file (a mid-batch rotation reopen failed): the buffered
+            // tail cannot be written and is discarded. Say so — silent audit
+            // loss is the failure mode this sink is supposed to avoid.
+            log.warn(
+                "file sink has no open file; discarding {d} buffered bytes",
+                .{write_buf.items.len},
+            );
         }
     }
 
