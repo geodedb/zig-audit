@@ -11,7 +11,7 @@ This document tracks two finding series:
 - **PERF-001..019** — the original 2026-03 performance review. Several are now **RESOLVED** by the syslog/channel redesign (persistent sockets, DNS cache, blocking condvar channel, `BoundedChannel` replacing the mutex `RingBuffer` in the hot path). The remainder are kept **OPEN** and cross-referenced to the GAP-* master series.
 - **PR-001..013** — the 2026-06-11 deep performance review. These are NEW findings, tracked as GitLab issues (links below). PR-011 was folded into GAP-041 and PR-014 into GAP-056; neither has a PR-series issue.
 
-> Cross-series note: the GAP-* master series and QR-* quality issues are maintained by a separate workstream in `docs/GAP_ANALYSIS.md`. This document does not create or own GAP-*/QR-* items; it only references them.
+> Cross-series note: the GAP-*master series and QR-* quality issues are maintained by a separate workstream in `docs/GAP_ANALYSIS.md`. This document does not create or own GAP-*/QR-* items; it only references them.
 
 ## Summary
 
@@ -191,7 +191,7 @@ The PR-series findings share a single root cause: the audit hot path re-derives,
 
 ## Scoring Methodology
 
-```
+```text
 PerfScore = Impact(1-5) x Likelihood(1-5) x 4
 
 Impact:

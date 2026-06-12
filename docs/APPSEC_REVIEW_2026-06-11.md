@@ -13,6 +13,7 @@
 **In scope (read directly from disk):** all of `src/` (`logger.zig`, `filters.zig`, `channel.zig`, `ring_buffer.zig`, `cef.zig`, `json_util.zig`, `time.zig`, `observability*.zig`, `sync.zig`, `root.zig`, `file_sink.zig`, `config.zig`, `syslog.zig`, `events.zig`), `build.zig`, `build.zig.zon`, `scripts/*.py` + `*.sh`, `.gitlab-ci.yml`, `.pre-commit-config.yaml`, `tests/`, `benchmarks/`, `examples/`, and the prior gap-analysis docs under `docs/`.
 
 **Assumptions / trust model:**
+
 - This is a **library** consumed by host applications. There is no network listener, no authn/authz of its own. Threats come from: (a) attacker-controlled **event field values** and **metadata** passed by the host app, (b) operator-controlled **config files**, (c) the **network path** to the syslog server, (d) **supply chain** (pinned deps, CI).
 - "Attacker-controlled" = data the host application forwards into an `AuditEvent` (e.g., a username, source IP, request metadata derived from an untrusted request).
 - Reproductions were run in Debug and `ReleaseSafe`/`ReleaseFast` (the optimization modes the CI matrix builds) using Zig 0.16.0.
@@ -57,6 +58,7 @@ Overall confidence: **High** for the reproduced findings (config coercion, contr
 **Description.** The JSON config parser reads integer fields with `@intCast` directly from `i64` JSON integers into narrower or unsigned targets without range checking. Every other malformed-input case in this parser returns a clean `error.InvalidConfig`, so the missing range check is an inconsistency that turns operator/attacker-influenced config into a crash (safe builds) or a silent wrong value (fast builds).
 
 **Evidence (`src/config.zig`):**
+
 - `.pid = @as(u32, @intCast(try jsonInteger(service_obj, "pid")))` — line 242
 - `.max_bytes = @as(u64, @intCast(try jsonInteger(file_obj, "max_bytes")))` — line 278
 - `.backup_count = @as(u32, @intCast(try jsonInteger(file_obj, "backup_count")))` — line 279
@@ -64,6 +66,7 @@ Overall confidence: **High** for the reproduced findings (config coercion, contr
 - `sync_interval` (line 272) and `version` (line 231) share the pattern.
 
 **Reproduced (Zig 0.16.0, `loadConfig` with `"port": 99999`):**
+
 - Debug / **ReleaseSafe** → `thread … panic: integer does not fit in destination type` at `config.zig:291` → process abort (DoS).
 - **ReleaseFast** → parses "successfully" with `port=34463` (99999 mod 65536) — **silent misconfiguration**: the syslog sink would target the wrong port with no error surfaced.
 
@@ -78,12 +81,14 @@ Overall confidence: **High** for the reproduced findings (config coercion, contr
 **Description.** GAP-023 added a `dropped_count` atomic and a one-shot warning to `SyslogSender` (`src/syslog.zig:105,195-200,203-205`). The **file sink was not given the same treatment.** When the file sink's bounded channel is full, the record is freed and the function returns success.
 
 **Evidence (`src/file_sink.zig:82-86`):**
+
 ```zig
 if (!self.ch.trySend(json_line)) {
     log.warn("file sink channel full; dropping audit event", .{});
     self.allocator.free(json_line);
 }
 ```
+
 `write` returns `!void` and yields success on this path; the same is true for `writeError` (lines 102-105). There is **no counter** and **no accessor** (`grep` confirms `dropped` exists only in `syslog.zig`). In `AuditLogger.audit` (`src/logger.zig:188-192`) the file-sink call only captures real errors, so a drop is invisible to the caller and to `span_durable`.
 
 **Failure mode.** Under burst load or slow disk, the 10 000-entry file-sink channel fills and audit records are discarded. The host application cannot detect the loss (no return error, no queryable counter), and the per-event `log.warn` both fails to quantify loss and risks log-spam amplification (one stderr line per dropped record). An attacker who can generate audit volume (e.g. a flood of auth events) can deliberately induce file-sink gaps to bury reconnaissance entries — the same threat model that motivated GAP-023 for syslog, left open for the file sink.
@@ -111,6 +116,7 @@ if (!self.ch.trySend(json_line)) {
 **Description.** S9 (file path from config not sanitized) was marked Open in the prior review. A partial mitigation was added — a `".."` substring check — but the prior fix guidance ("resolve to an absolute path and verify it does not escape an allowed base directory; reject `..` components") was only half-implemented.
 
 **Evidence (`src/file_sink.zig:264-288`):**
+
 ```zig
 fn openCurrentFile(self: *FileSink) !void {
     if (std.mem.indexOf(u8, self.config.path, "..") != null) {
@@ -131,10 +137,12 @@ fn openCurrentFile(self: *FileSink) !void {
 **Description.** `formatRfc3339` casts `@divTrunc(ts_ms, 1000)` into `EpochSeconds.secs` (a `u64`) with `@intCast`, which panics on any negative value.
 
 **Evidence (`src/time.zig:43-45`):**
+
 ```zig
 const millis_u32: u32 = @intCast(@as(i64, @intCast(millis)));
 const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) };
 ```
+
 **Reproduced.** `formatRfc3339(-1000, &buf)` → `panic: integer does not fit in destination type` at `time.zig:45`.
 
 **Reachability (important caveat).** The event's own timestamp is **not** rendered to output — all sink output uses `clock.nowRfc3339()` (see A7). So the negative-timestamp panic is **not reachable from a normal `audit()` call with attacker-controlled event data**. It is reachable via: a `FixedClock` constructed with a negative value, a (pathological) system clock before 1970, or a host application calling the **public** `formatRfc3339` / `Clock.nowRfc3339` with a negative input. Hence Low, but it is a public API that crashes on bad input.
@@ -148,12 +156,14 @@ const epoch_seconds: std.time.epoch.EpochSeconds = .{ .secs = @intCast(seconds) 
 **Description.** The `dns` dependency URL requests tag `v0.1.9`, but the recorded content hash self-labels version `0.1.8`.
 
 **Evidence (`build.zig.zon:7-10`):**
+
 ```zig
 .dns = .{
     .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=v0.1.9#dc2329d5355dce4097a71a762869d2d89b541dca",
     .hash = "dns-0.1.8-x4U-zaM-EQA4bavPz0btJDlS3QpjWQaEtoRREyRc-Mef",
 },
 ```
+
 Recent history (`chore(deps): converge tls onto v0.1.9 (GAP-0838 diamond sync)`, `bump to v0.1.6 (tagged sibling deps)`) indicates active pin churn in this area.
 
 **Failure mode.** Zig still verifies the fetched content against the `.hash`, so this is not a content-integrity break. But the mismatch between the requested **ref label** (`v0.1.9`) and the **resolved package version** (`0.1.8`) defeats human/auditor version tracking and CVE matching — precisely the "two labels for one thing" drift the repo's own `scripts/detect_diamond_deps.py` exists to catch. Either the `v0.1.9` tag points at a tree whose `build.zig.zon` self-declares `0.1.8`, or the pin was partially updated.

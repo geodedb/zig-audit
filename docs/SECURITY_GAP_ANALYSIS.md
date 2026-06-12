@@ -53,7 +53,7 @@ Additional 2026-06-11 security/supply-chain findings (`NEW-SEC-*`) are tracked a
 
 ## Scoring Methodology
 
-```
+```text
 Risk Score = Impact (1-5) x Likelihood (1-5) x 4
 ```
 

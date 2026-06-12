@@ -9,6 +9,7 @@
 **Tech Stack:** Zig 0.16.0 (`zig build check`, `zig build test-all --summary all`, `zig fmt`), Python 3 + ruff for scripts/, GitLab CI, pre-commit.
 
 **Verification commands (run after every task):**
+
 - `zig build check` → must succeed
 - `zig build test-all --summary all` → all pass (currently 106/107 + 1 expected otel skip)
 - `zig fmt src/ tests/ benchmarks/ build.zig` before committing
@@ -22,6 +23,7 @@
 ### Task A1: QR-001 — `buildAuditLogger` use-after-return (Critical)
 
 **Files:**
+
 - Modify: `src/logger.zig:250-255` (buildAuditLogger), `src/logger.zig:21-77` (AuditLogger struct/init/deinit)
 - Test: add to `src/logger.zig` tests
 
@@ -114,6 +116,7 @@ pub fn buildAuditLogger(allocator: std.mem.Allocator, cfg: config.Config) !*Audi
 ### Task A2: QR-002 — double-free/UAF on non-object metadata (Critical)
 
 **Files:**
+
 - Modify: `src/filters.zig:372` (the `else => metadata` aliasing branch)
 - Test: add to `tests/test_filters.zig` and `src/logger.zig`
 
@@ -177,6 +180,7 @@ test "audit: non-object metadata does not double-free (QR-002)" {
 ### Task A3: QR-003 — truncation path frees string literals (Critical)
 
 **Files:**
+
 - Modify: `src/logger.zig:171-174`
 - Test: add to `src/logger.zig`
 
@@ -228,12 +232,14 @@ NOTE: `loadTestConfig` must allow the `big` key through the filters (check `allo
 ### Task A4: QR-004 — Config ownership contract (High)
 
 **Files:**
+
 - Modify: `src/config.zig:144-171` (doc comment on `Config`), `src/logger.zig:29-34` (doc comment on `init`)
 - (Signature change of `buildAuditLogger` already done in Task A1.)
 
 - [ ] **Step 1:** Add explicit ownership docs:
 
 On `Config` (config.zig, above `pub const Config`):
+
 ```zig
 /// Parsed configuration. OWNERSHIP: `AuditLogger.init`/`buildAuditLogger`
 /// take ownership of a `Config` passed to them — the logger calls
@@ -243,6 +249,7 @@ On `Config` (config.zig, above `pub const Config`):
 ```
 
 On `AuditLogger.init` (logger.zig):
+
 ```zig
     /// Takes ownership of `audit_config`; freed in `deinit()`. Do not call
     /// `audit_config.deinit()` after a successful `init`.
@@ -257,6 +264,7 @@ On `AuditLogger.init` (logger.zig):
 ### Task B1: GAP-040 (A1) — range-checked config integer parsing
 
 **Files:**
+
 - Modify: `src/config.zig` lines ~231, 242, 272, 278, 279, 291 (every `@intCast(try jsonInteger(...))`)
 - Test: add to `src/config.zig` tests
 
@@ -291,6 +299,7 @@ Replace e.g. `.port = @as(u16, @intCast(try jsonInteger(syslog_obj, "port")))` w
 ### Task B2: GAP-050 — implement `PiiMode.hash`
 
 **Files:**
+
 - Modify: `src/filters.zig:273-279` (`redactOrMaskValue`), `src/filters.zig:346-357` (key-token mask path)
 - Test: `tests/test_filters.zig`
 
@@ -353,6 +362,7 @@ In the key-token path of `filterAndRedactMetadataRecursive` (currently `pii_mode
 ### Task B3: GAP-042 + GAP-047 (A3+A8) — control-character neutralization
 
 **Files:**
+
 - Modify: `src/cef.zig:218-234` (`escapeCefString`), `src/events.zig:75-101` (`validate`)
 - Test: `tests/test_cef.zig`, `src/events.zig` tests
 
@@ -415,6 +425,7 @@ In `validate()`, add `error.InvalidCharacter` to `ValidateError` and after the l
 ### Task B4: GAP-043 (A4) — proper path validation + allowed base dir
 
 **Files:**
+
 - Modify: `src/file_sink.zig:264-288` (`openCurrentFile`), `src/config.zig` (`FileSinkConfig` + parser)
 - Test: `src/file_sink.zig` tests
 
@@ -465,6 +476,7 @@ Call `try self.validatePath();` at the top of `openCurrentFile` (replacing the s
 ### Task B5: GAP-063 — create log file with restrictive mode atomically
 
 **Files:**
+
 - Modify: `src/file_sink.zig:278-287`
 
 - [ ] **Step 1:** Check `std.Io.Dir.createFile` options for a `mode`/`permissions` field (read the std source for the installed 0.16 toolchain: `~/zig/.../lib/std/Io/Dir.zig` or wherever `createFile`'s options struct is defined).
@@ -475,6 +487,7 @@ Call `try self.validatePath();` at the top of `openCurrentFile` (replacing the s
 ### Task B6: GAP-041 (A2) + QR-005 — drop visibility and honest durability
 
 **Files:**
+
 - Modify: `src/file_sink.zig` (struct, `write`, `writeError`), `src/syslog.zig` (`send` return), `src/logger.zig:177-204`
 - Test: `src/file_sink.zig`, `src/logger.zig`
 
@@ -695,6 +708,7 @@ test "root.version matches build.zig.zon (GAP-074)" {
 ```
 
 `writeBatch` concatenates into a reusable `std.ArrayList(u8)` buffer (rotation check per line with each line's len; flush buffer before rotating when a rotation boundary hits mid-batch — simplest correct: for each line, if rotation needed: flush buffer, rotate, continue filling), one `writeStreamingAll` per flush, then ONE `maybeFsync` per batch — with `.per_event` mode still fsyncing once per batch flush is a behavior change; preserve `.per_event` semantics by treating batch flushes as the event boundary **only when sync_mode != .per_event**; for `.per_event`, write+fsync per line (durability contract preserved).
+
 - [ ] **Step 3: test-all PASS (incl. rotation + periodic tests). Run `zig build scale-bench 2>/dev/null | head -40` and record `file_sink_ns` / `logger_ops_sec` before/after in the commit message.**
 - [ ] **Commit** `perf(file_sink,syslog): batch worker drains; buffered writes (PR-012, PR-006)`
 
@@ -731,6 +745,7 @@ test "root.version matches build.zig.zon (GAP-074)" {
 ```
 
 **Behavior note:** the old code let metadata *overwrite* fixed fields via fetchSwapRemove. Preserve that: metadata keys win. With streaming, invert: when writing fixed fields, skip any whose name exists in `metadata.object` (single `metadata.object.contains(name)` check per fixed field), then write all metadata entries. Assert this in the characterization test (metadata key `"category"` overrides). This removes the 4th metadata deep-copy, the constant-key dupes, and the throwaway ObjectMap in one change. Adapt the exact `std.json.Stringify` streaming API from the installed std (read `lib/std/json/Stringify.zig`); if the writer-based API differs, use whatever incremental emitter 0.16 provides.
+
 - [ ] **Step 3: test-all PASS; scale-bench delta recorded. Commit** `perf(file_sink): stream JSON line directly, drop intermediate ObjectMap (GAP-057, GAP-055, GAP-053, PR-001, NEW-PERF-005)`
 
 ### Task D4: small allocations — GAP-051, GAP-052, PR-005, PR-008, GAP-056
@@ -807,6 +822,7 @@ In `audit()`:
 ```
 
 Delete the old free/clone-back block (lines 152-160) and the `filtered_metadata` defer. `filters.filterAndRedactMetadata` already returns an independently-owned tree for all input shapes (after Task A2).
+
 - [ ] **Step 3: test-all PASS under DebugAllocator; scale-bench `clone_ns`+`logger_ops_sec` delta recorded.**
 - [ ] **Commit** `perf(logger): single-copy metadata pipeline — filter from caller tree, move into event (GAP-049, PERF-001, PERF-005, #39)`
 
