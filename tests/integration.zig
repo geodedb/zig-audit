@@ -16,7 +16,10 @@ const syslog = lib.syslog;
 const time = lib.time;
 
 test "integration: library initializes successfully" {
-    try std.testing.expectEqualStrings("0.1.0", lib.version);
+    // lib.version is single-sourced from build.zig.zon (GAP-074); assert it
+    // is a well-formed semver instead of pinning a value that would drift
+    // on every release.
+    _ = try std.SemanticVersion.parse(lib.version);
 }
 
 test "integration: auth login success with exact syslog output" {
@@ -57,7 +60,13 @@ test "integration: auth login success with exact syslog output" {
     const messages = mock_sender.getMessages();
     try testing.expect(messages.len == 1);
 
-    const expected_syslog_line = "<166>1 2025-01-01T00:00:00.000Z app-host authsvc 1234 AUDIT - CEF:0|DEVNW|AUDIT|0.1.0|auth.login|User login|5|rt=2025-01-01T00:00:00.000Z act=login outcome=success suser=jane.doe src=203.0.113.5 requestId=req-abc123 traceId=11111111111111111111111111111111 spanId=2222222222222222 cs1Label=actorId cs1=jane.doe cs2Label=sessionId cs2=ses-999 deviceExternalId=req-abc123";
+    // The CEF device-version field comes from loadTestConfig, which uses
+    // lib.version (single-sourced from build.zig.zon) — interpolate it so
+    // the assertion does not drift on version bumps.
+    const expected_syslog_line = std.fmt.comptimePrint(
+        "<166>1 2025-01-01T00:00:00.000Z app-host authsvc 1234 AUDIT - CEF:0|DEVNW|AUDIT|{s}|auth.login|User login|5|rt=2025-01-01T00:00:00.000Z act=login outcome=success suser=jane.doe src=203.0.113.5 requestId=req-abc123 traceId=11111111111111111111111111111111 spanId=2222222222222222 cs1Label=actorId cs1=jane.doe cs2Label=sessionId cs2=ses-999 deviceExternalId=req-abc123",
+        .{lib.version},
+    );
 
     try testing.expectEqualStrings(expected_syslog_line, messages[0]);
 }

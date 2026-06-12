@@ -33,8 +33,10 @@
 //!
 //! Apache-2.0
 
-/// Library version
-pub const version = "0.1.0";
+/// Library version. Single-sourced from build.zig.zon via build.zig's
+/// `package_version` build option (GAP-074/QR-017) — it cannot drift from
+/// the package version.
+pub const version: []const u8 = @import("build_options").package_version;
 
 // ── Re-exported submodules ──────────────────────────────────────────────
 
@@ -88,4 +90,11 @@ pub const BoundedChannel = channel.BoundedChannel;
 test {
     // Ensure all declarations are referenced for test coverage
     @import("std").testing.refAllDecls(@This());
+}
+
+test "root.version matches build.zig.zon (GAP-074)" {
+    // build_options.package_version is injected from build.zig.zon by
+    // build.zig — this pins the public constant to the package version.
+    const std = @import("std");
+    try std.testing.expectEqualStrings(@import("build_options").package_version, version);
 }
