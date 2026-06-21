@@ -136,6 +136,8 @@ pub const IdGen = struct {
 };
 
 pub const SystemIdGen = struct {
+    // fips-exempt: non-security — trace/span ID generation; IDs are
+    // observability correlators, not secrets or authentication material.
     rng: std.Random.DefaultPrng,
 
     const vtable = IdGen.VTable{
@@ -152,6 +154,7 @@ pub const SystemIdGen = struct {
             std.mem.writeInt(i64, seed_bytes[0..8], @truncate(ts), .little);
         };
         return SystemIdGen{
+            // fips-exempt: non-security — non-crypto trace/span IDs (see field above).
             .rng = std.Random.DefaultPrng.init(@bitCast(seed_bytes)),
         };
     }

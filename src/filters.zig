@@ -293,10 +293,19 @@ fn detectValueTypeFiltered(value: []const u8, filters_cfg: *const config.Filters
 /// same subject without exposing the raw value, but it is NOT a substitute
 /// for redaction when confidentiality from the log reader is required.
 fn hashValue(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
+    // fips-exempt: non-security — pseudonymization of low-entropy PII for log
+    // correlation only; output is explicitly NOT a secret (see doc-comment above)
+    // and is not used for authentication, integrity, or confidentiality.
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
     const hex = std.fmt.bytesToHex(digest[0..8].*, .lower);
     return std.fmt.allocPrint(allocator, "sha256:{s}", .{hex});
+}
+
+test "fips-exempt annotation present on hashValue Sha256 site" {
+    const src = @embedFile("filters.zig");
+    // The non-security SHA-256 digest must carry the FIPS exemption marker.
+    try std.testing.expect(std.mem.indexOf(u8, src, "fips-exempt: non-security — pseudonymization") != null);
 }
 
 /// Produce the redacted (or masked/hashed) string for a detected value type,
