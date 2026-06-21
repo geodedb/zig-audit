@@ -1,0 +1,156 @@
+250:27:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+557:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+558:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+610:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+879:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+880:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+933:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+934:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+996:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+997:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1058:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1059:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1119:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1120:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1201:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1250:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1294:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+1370:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+15:7:1:ZL203.const_snakecase:constant 'FILE_QUEUE_SIZE' should use snake_case (or PascalCase for types)
+19:7:1:ZL203.const_snakecase:constant 'DRAIN_BATCH_CAP' should use snake_case (or PascalCase for types)
+41:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+111:101:2:ZL300.max_line_length:line exceeds 100 characters (123)
+301:101:2:ZL300.max_line_length:line exceeds 100 characters (119)
+316:101:2:ZL300.max_line_length:line exceeds 100 characters (121)
+398:101:2:ZL300.max_line_length:line exceeds 100 characters (116)
+401:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+410:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+452:101:2:ZL300.max_line_length:line exceeds 100 characters (110)
+482:101:2:ZL300.max_line_length:line exceeds 100 characters (126)
+799:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+973:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+1035:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+1096:101:2:ZL300.max_line_length:line exceeds 100 characters (111)
+1236:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+1280:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+1325:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+1356:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+183:61:2:ZL303.max_nesting:nesting depth exceeds 4 (6)
+24:5:1:ZL009.var_should_be_const:variable 'abs_path_no_jail_noticed' is never reassigned; consider using 'const'
+124:13:1:ZL009.var_should_be_const:variable 'ts_buf' is never reassigned; consider using 'const'
+128:13:1:ZL009.var_should_be_const:variable 'aw' is never reassigned; consider using 'const'
+131:13:1:ZL009.var_should_be_const:variable 'js' is never reassigned; consider using 'const'
+157:13:1:ZL009.var_should_be_const:variable 'write_buf' is never reassigned; consider using 'const'
+159:13:1:ZL009.var_should_be_const:variable 'batch' is never reassigned; consider using 'const'
+163:17:1:ZL009.var_should_be_const:variable 'n' is never reassigned; consider using 'const'
+190:13:1:ZL009.var_should_be_const:variable 'buffered_count' is never reassigned; consider using 'const'
+320:13:1:ZL009.var_should_be_const:variable 'ts_buf' is never reassigned; consider using 'const'
+328:13:1:ZL009.var_should_be_const:variable 'aw' is never reassigned; consider using 'const'
+331:13:1:ZL009.var_should_be_const:variable 'js' is never reassigned; consider using 'const'
+396:13:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+429:13:1:ZL009.var_should_be_const:variable 'it' is never reassigned; consider using 'const'
+543:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+569:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+735:9:1:ZL009.var_should_be_const:variable 'nested' is never reassigned; consider using 'const'
+740:9:1:ZL009.var_should_be_const:variable 'list' is never reassigned; consider using 'const'
+746:9:1:ZL009.var_should_be_const:variable 'meta' is never reassigned; consider using 'const'
+844:9:1:ZL009.var_should_be_const:variable 'parsed' is never reassigned; consider using 'const'
+868:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+922:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+964:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+975:9:1:ZL009.var_should_be_const:variable 'line_count' is never reassigned; consider using 'const'
+985:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+1010:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+1047:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+1072:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+1098:9:1:ZL009.var_should_be_const:variable 'line_count' is never reassigned; consider using 'const'
+1108:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+1137:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+1162:9:1:ZL009.var_should_be_const:variable 'total_lines' is never reassigned; consider using 'const'
+1163:9:1:ZL009.var_should_be_const:variable 'rotated_files' is never reassigned; consider using 'const'
+1164:9:1:ZL009.var_should_be_const:variable 'path_buf' is never reassigned; consider using 'const'
+1165:9:1:ZL009.var_should_be_const:variable 'file_idx' is never reassigned; consider using 'const'
+1177:13:1:ZL009.var_should_be_const:variable 'iter' is never reassigned; consider using 'const'
+1449:9:1:ZL009.var_should_be_const:variable 'fixed_clock' is never reassigned; consider using 'const'
+1451:9:1:ZL009.var_should_be_const:variable 'sink' is never reassigned; consider using 'const'
+522:50:1:ZL010.magic_number:magic number 0o640; consider using a named constant
+535:78:1:ZL010.magic_number:magic number 0o640; consider using a named constant
+570:16:1:ZL010.magic_number:magic number 50; consider using a named constant
+616:22:1:ZL010.magic_number:magic number 10; consider using a named constant
+630:38:1:ZL010.magic_number:magic number 6; consider using a named constant
+636:38:1:ZL010.magic_number:magic number 5; consider using a named constant
+640:38:1:ZL010.magic_number:magic number 6; consider using a named constant
+663:48:1:ZL010.magic_number:magic number 5000; consider using a named constant
+738:50:1:ZL010.magic_number:magic number 7; consider using a named constant
+750:52:1:ZL010.magic_number:magic number 3; consider using a named constant
+761:48:1:ZL010.magic_number:magic number 5000; consider using a named constant
+786:40:1:ZL010.magic_number:magic number 19; consider using a named constant
+803:38:1:ZL010.magic_number:magic number 3; consider using a named constant
+811:38:1:ZL010.magic_number:magic number 7; consider using a named constant
+814:40:1:ZL010.magic_number:magic number 3; consider using a named constant
+848:40:1:ZL010.magic_number:magic number 3; consider using a named constant
+885:22:1:ZL010.magic_number:magic number 1048576; consider using a named constant
+939:22:1:ZL010.magic_number:magic number 1048576; consider using a named constant
+942:26:1:ZL010.magic_number:magic number 5; consider using a named constant
+965:16:1:ZL010.magic_number:magic number 6; consider using a named constant
+980:38:1:ZL010.magic_number:magic number 6; consider using a named constant
+1002:22:1:ZL010.magic_number:magic number 1048576; consider using a named constant
+1219:51:1:ZL010.magic_number:magic number 0o640; consider using a named constant
+1219:87:1:ZL010.magic_number:magic number 0o777; consider using a named constant
+30:1:1:ZL011.missing_doc_comment:public declaration 'FileSink' is missing documentation
+41:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+68:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+858:18:2:ZL500.os_specific_code:Linux-specific code '/dev/' may cause portability issues; consider adding OS detection guards
+678:57:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+715:57:2:ZL500.os_specific_code:Windows-specific code ':\' may cause portability issues; consider adding OS detection guards
+1334:50:2:ZL500.os_specific_code:Unix-specific path code '"/var/' may cause portability issues; consider adding OS detection guards
+577:35:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+629:32:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+635:31:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+678:52:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+690:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+715:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+726:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+759:19:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+791:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+828:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+837:77:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+851:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+858:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+878:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+884:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+914:51:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+932:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+938:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+973:59:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+995:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1001:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1035:59:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1042:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1057:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1063:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1096:59:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1118:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1128:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1168:25:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1200:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1205:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1231:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1249:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1254:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1274:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1277:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1293:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1298:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1317:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1320:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1334:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1335:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1348:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1369:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1404:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+1453:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+914:25:1:ZL603.missing_defer_cleanup:resource '.openFile(' may not be properly cleaned up; consider using defer
+1216:25:1:ZL603.missing_defer_cleanup:resource '.openFile(' may not be properly cleaned up; consider using defer
+62:31:1:ZL603.missing_defer_cleanup:resource 'std.Thread.spawn(' may not be properly cleaned up; consider using defer
+30:20:1:ZL605.large_struct_copy:struct 'FileSink' has 63 fields; consider passing by pointer to avoid copies

@@ -297,6 +297,8 @@ fn hashValue(allocator: std.mem.Allocator, value: []const u8) ![]const u8 {
     // correlation only; output is explicitly NOT a secret (see doc-comment above)
     // and is not used for authentication, integrity, or confidentiality.
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    // fips-exempt: non-security — see doc-comment/notes above; pseudonymization
+    // hash for log correlation, not authentication/integrity/confidentiality.
     std.crypto.hash.sha2.Sha256.hash(value, &digest, .{});
     const hex = std.fmt.bytesToHex(digest[0..8].*, .lower);
     return std.fmt.allocPrint(allocator, "sha256:{s}", .{hex});

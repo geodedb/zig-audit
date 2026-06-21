@@ -1,0 +1,46 @@
+228:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+270:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+310:101:2:ZL300.max_line_length:line exceeds 100 characters (111)
+318:101:2:ZL300.max_line_length:line exceeds 100 characters (151)
+382:101:2:ZL300.max_line_length:line exceeds 100 characters (115)
+389:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+393:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+398:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+472:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+487:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+497:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+502:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+516:101:2:ZL300.max_line_length:line exceeds 100 characters (120)
+524:101:2:ZL300.max_line_length:line exceeds 100 characters (143)
+541:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+486:69:2:ZL303.max_nesting:nesting depth exceeds 4 (8)
+121:9:1:ZL009.var_should_be_const:variable 'segments' is never reassigned; consider using 'const'
+153:9:1:ZL009.var_should_be_const:variable 'digits' is never reassigned; consider using 'const'
+154:9:1:ZL009.var_should_be_const:variable 'digit_count' is never reassigned; consider using 'const'
+169:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+171:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+174:13:1:ZL009.var_should_be_const:variable 'digit' is never reassigned; consider using 'const'
+209:9:1:ZL009.var_should_be_const:variable 'digit_count' is never reassigned; consider using 'const'
+235:9:1:ZL009.var_should_be_const:variable 'digits' is never reassigned; consider using 'const'
+236:9:1:ZL009.var_should_be_const:variable 'digit_count' is never reassigned; consider using 'const'
+299:9:1:ZL009.var_should_be_const:variable 'digest' is never reassigned; consider using 'const'
+368:17:1:ZL009.var_should_be_const:variable 'filtered_map' is never reassigned; consider using 'const'
+374:17:1:ZL009.var_should_be_const:variable 'iter' is never reassigned; consider using 'const'
+478:17:1:ZL009.var_should_be_const:variable 'redacted_array' is never reassigned; consider using 'const'
+166:23:1:ZL010.magic_number:magic number 13; consider using a named constant
+166:43:1:ZL010.magic_number:magic number 19; consider using a named constant
+177:25:1:ZL010.magic_number:magic number 9; consider using a named constant
+177:37:1:ZL010.magic_number:magic number 9; consider using a named constant
+183:18:1:ZL010.magic_number:magic number 10; consider using a named constant
+197:17:1:ZL010.magic_number:magic number 127; consider using a named constant
+201:17:1:ZL010.magic_number:magic number 127; consider using a named constant
+217:27:1:ZL010.magic_number:magic number 10; consider using a named constant
+217:49:1:ZL010.magic_number:magic number 15; consider using a named constant
+246:23:1:ZL010.magic_number:magic number 10; consider using a named constant
+261:22:1:ZL010.magic_number:magic number 3; consider using a named constant
+281:22:1:ZL010.magic_number:magic number 3; consider using a named constant
+11:1:1:ZL011.missing_doc_comment:public declaration 'FilterResult' is missing documentation
+28:1:1:ZL011.missing_doc_comment:public declaration 'RedactionToken' is missing documentation
+40:5:1:ZL011.missing_doc_comment:public declaration 'toString' is missing documentation
+56:1:1:ZL011.missing_doc_comment:public declaration 'isSensitiveKey' is missing documentation
+348:1:1:ZL011.missing_doc_comment:public declaration 'filterAndRedactMetadata' is missing documentation

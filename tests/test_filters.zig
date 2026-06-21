@@ -1288,7 +1288,10 @@ test "GAP-054 pinning: PAN under sensitive key redacts to card token; email unde
     try testing.expectEqualStrings("[REDACTED_PAN]", obj.get("card_number").?.string);
 
     // Expected pseudonym: "sha256:" + first 16 hex chars of SHA-256(value).
+    // fips-exempt: non-security — test KAT recomputing the non-security
+    // pseudonym digest to assert against; not a security operation.
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    // fips-exempt: non-security — test KAT, see note above.
     std.crypto.hash.sha2.Sha256.hash("user@example.com", &digest, .{});
     const hex = std.fmt.bytesToHex(digest[0..8].*, .lower);
     var expected_buf: [7 + 16]u8 = undefined;

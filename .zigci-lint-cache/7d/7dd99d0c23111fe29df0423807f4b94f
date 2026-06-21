@@ -1,0 +1,28 @@
+153:52:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+156:62:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+158:59:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+95:101:2:ZL300.max_line_length:line exceeds 100 characters (205)
+142:101:2:ZL300.max_line_length:line exceeds 100 characters (116)
+178:101:2:ZL300.max_line_length:line exceeds 100 characters (115)
+179:101:2:ZL300.max_line_length:line exceeds 100 characters (115)
+180:101:2:ZL300.max_line_length:line exceeds 100 characters (115)
+55:49:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+18:9:1:ZL009.var_should_be_const:variable 'val' is never reassigned; consider using 'const'
+51:17:1:ZL009.var_should_be_const:variable 'cloned_array' is never reassigned; consider using 'const'
+69:17:1:ZL009.var_should_be_const:variable 'cloned_map' is never reassigned; consider using 'const'
+73:21:1:ZL009.var_should_be_const:variable 'cloned_iter' is never reassigned; consider using 'const'
+80:17:1:ZL009.var_should_be_const:variable 'iter' is never reassigned; consider using 'const'
+137:9:1:ZL009.var_should_be_const:variable 'inner' is never reassigned; consider using 'const'
+141:9:1:ZL009.var_should_be_const:variable 'outer' is never reassigned; consider using 'const'
+177:9:1:ZL009.var_should_be_const:variable 'obj' is never reassigned; consider using 'const'
+189:13:1:ZL009.var_should_be_const:variable 'failing_arr' is never reassigned; consider using 'const'
+196:13:1:ZL009.var_should_be_const:variable 'failing_obj' is never reassigned; consider using 'const'
+208:9:1:ZL009.var_should_be_const:variable 'arr' is never reassigned; consider using 'const'
+101:57:1:ZL010.magic_number:magic number 42; consider using a named constant
+114:80:1:ZL010.magic_number:magic number 99; consider using a named constant
+115:49:1:ZL010.magic_number:magic number 99; consider using a named constant
+138:86:1:ZL010.magic_number:magic number 42; consider using a named constant
+159:48:1:ZL010.magic_number:magic number 42; consider using a named constant
+168:13:1:ZL010.magic_number:magic number 4; consider using a named constant
+210:47:1:ZL010.magic_number:magic number 7; consider using a named constant
+222:61:1:ZL010.magic_number:magic number 7; consider using a named constant

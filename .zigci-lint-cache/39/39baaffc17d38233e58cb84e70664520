@@ -1,0 +1,67 @@
+654:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+655:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+729:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+730:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+288:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+359:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+429:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+462:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+501:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+564:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+625:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+652:101:2:ZL300.max_line_length:line exceeds 100 characters (141)
+666:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+727:101:2:ZL300.max_line_length:line exceeds 100 characters (140)
+741:101:2:ZL300.max_line_length:line exceeds 100 characters (112)
+746:101:2:ZL300.max_line_length:line exceeds 100 characters (119)
+760:101:2:ZL300.max_line_length:line exceeds 100 characters (120)
+773:101:2:ZL300.max_line_length:line exceeds 100 characters (107)
+90:9:2:ZL301.max_function_lines:function exceeds 80 lines (131)
+161:51:2:ZL303.max_nesting:nesting depth exceeds 4 (5)
+690:38:2:ZL108.sensitive_data_exposure:potential hardcoded secret 'password'; use environment variables or secure storage
+102:13:1:ZL009.var_should_be_const:variable 'event_kind_buf' is never reassigned; consider using 'const'
+158:17:1:ZL009.var_should_be_const:variable 'truncation_obj' is never reassigned; consider using 'const'
+160:21:1:ZL009.var_should_be_const:variable 'trunc_iter' is never reassigned; consider using 'const'
+231:17:1:ZL009.var_should_be_const:variable 'trace_buf' is never reassigned; consider using 'const'
+237:17:1:ZL009.var_should_be_const:variable 'span_buf' is never reassigned; consider using 'const'
+320:17:1:ZL009.var_should_be_const:variable 'scratch' is never reassigned; consider using 'const'
+321:17:1:ZL009.var_should_be_const:variable 'counter' is never reassigned; consider using 'const'
+348:9:1:ZL009.var_should_be_const:variable 'owned_cfg' is never reassigned; consider using 'const'
+369:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+377:9:1:ZL009.var_should_be_const:variable 'buf1' is never reassigned; consider using 'const'
+378:9:1:ZL009.var_should_be_const:variable 'buf2' is never reassigned; consider using 'const'
+403:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+421:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+454:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+467:9:1:ZL009.var_should_be_const:variable 'nested_obj' is never reassigned; consider using 'const'
+471:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+493:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+505:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+554:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+572:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+617:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+641:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+650:9:1:ZL009.var_should_be_const:variable 'dir_suffix' is never reassigned; consider using 'const'
+676:9:1:ZL009.var_should_be_const:variable 'inner_arr' is never reassigned; consider using 'const'
+681:9:1:ZL009.var_should_be_const:variable 'inner_obj' is never reassigned; consider using 'const'
+686:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+718:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+725:9:1:ZL009.var_should_be_const:variable 'dir_suffix' is never reassigned; consider using 'const'
+747:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+765:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+770:9:1:ZL009.var_should_be_const:variable 'fixed_clock' is never reassigned; consider using 'const'
+771:9:1:ZL009.var_should_be_const:variable 'fixed_id_gen' is never reassigned; consider using 'const'
+785:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+789:9:1:ZL009.var_should_be_const:variable 'event' is never reassigned; consider using 'const'
+148:30:1:ZL010.magic_number:magic number 8192; consider using a named constant
+310:45:1:ZL010.magic_number:magic number 48; consider using a named constant
+314:17:1:ZL010.magic_number:magic number 20; consider using a named constant
+325:45:1:ZL010.magic_number:magic number 8192; consider using a named constant
+474:76:1:ZL010.magic_number:magic number 3; consider using a named constant
+531:35:1:ZL010.magic_number:magic number 8192; consider using a named constant
+21:1:1:ZL011.missing_doc_comment:public declaration 'AuditLogger' is missing documentation
+73:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+90:5:1:ZL011.missing_doc_comment:public declaration 'audit' is missing documentation
+469:70:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+589:17:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+746:38:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

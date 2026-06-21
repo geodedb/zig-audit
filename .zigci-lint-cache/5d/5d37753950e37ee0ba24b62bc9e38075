@@ -1,0 +1,78 @@
+210:101:2:ZL300.max_line_length:line exceeds 100 characters (121)
+216:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+225:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+232:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+254:101:2:ZL300.max_line_length:line exceeds 100 characters (103)
+261:101:2:ZL300.max_line_length:line exceeds 100 characters (102)
+486:101:2:ZL300.max_line_length:line exceeds 100 characters (101)
+487:101:2:ZL300.max_line_length:line exceeds 100 characters (130)
+489:101:2:ZL300.max_line_length:line exceeds 100 characters (129)
+587:101:2:ZL300.max_line_length:line exceeds 100 characters (147)
+588:101:2:ZL300.max_line_length:line exceeds 100 characters (130)
+590:101:2:ZL300.max_line_length:line exceeds 100 characters (129)
+611:101:2:ZL300.max_line_length:line exceeds 100 characters (149)
+612:101:2:ZL300.max_line_length:line exceeds 100 characters (130)
+614:101:2:ZL300.max_line_length:line exceeds 100 characters (129)
+634:101:2:ZL300.max_line_length:line exceeds 100 characters (135)
+635:101:2:ZL300.max_line_length:line exceeds 100 characters (130)
+637:101:2:ZL300.max_line_length:line exceeds 100 characters (129)
+665:101:2:ZL300.max_line_length:line exceeds 100 characters (122)
+666:101:2:ZL300.max_line_length:line exceeds 100 characters (130)
+668:101:2:ZL300.max_line_length:line exceeds 100 characters (129)
+695:101:2:ZL300.max_line_length:line exceeds 100 characters (126)
+696:101:2:ZL300.max_line_length:line exceeds 100 characters (134)
+698:101:2:ZL300.max_line_length:line exceeds 100 characters (131)
+696:110:2:ZL303.max_nesting:nesting depth exceeds 4 (9)
+674:9:1:ZL009.var_should_be_const:variable 'cfg' is never reassigned; consider using 'const'
+730:13:1:ZL009.var_should_be_const:variable 'parsed' is never reassigned; consider using 'const'
+48:24:1:ZL010.magic_number:magic number 17; consider using a named constant
+49:24:1:ZL010.magic_number:magic number 18; consider using a named constant
+50:24:1:ZL010.magic_number:magic number 19; consider using a named constant
+51:24:1:ZL010.magic_number:magic number 20; consider using a named constant
+52:24:1:ZL010.magic_number:magic number 21; consider using a named constant
+53:24:1:ZL010.magic_number:magic number 22; consider using a named constant
+54:24:1:ZL010.magic_number:magic number 23; consider using a named constant
+600:42:1:ZL010.magic_number:magic number 50; consider using a named constant
+761:20:1:ZL010.magic_number:magic number 1234; consider using a named constant
+774:30:1:ZL010.magic_number:magic number 1048576; consider using a named constant
+775:33:1:ZL010.magic_number:magic number 5; consider using a named constant
+781:25:1:ZL010.magic_number:magic number 514; consider using a named constant
+10:1:1:ZL011.missing_doc_comment:public declaration 'SyslogProtocol' is missing documentation
+15:5:1:ZL011.missing_doc_comment:public declaration 'fromString' is missing documentation
+23:1:1:ZL011.missing_doc_comment:public declaration 'SyslogFacility' is missing documentation
+33:5:1:ZL011.missing_doc_comment:public declaration 'fromString' is missing documentation
+45:5:1:ZL011.missing_doc_comment:public declaration 'toInt' is missing documentation
+59:1:1:ZL011.missing_doc_comment:public declaration 'PiiMode' is missing documentation
+64:5:1:ZL011.missing_doc_comment:public declaration 'fromString' is missing documentation
+72:1:1:ZL011.missing_doc_comment:public declaration 'ServiceConfig' is missing documentation
+78:1:1:ZL011.missing_doc_comment:public declaration 'CefIdentityConfig' is missing documentation
+84:1:1:ZL011.missing_doc_comment:public declaration 'IdentityConfig' is missing documentation
+105:5:1:ZL011.missing_doc_comment:public declaration 'fromString' is missing documentation
+113:1:1:ZL011.missing_doc_comment:public declaration 'FileSinkConfig' is missing documentation
+137:1:1:ZL011.missing_doc_comment:public declaration 'SyslogRfc5424Config' is missing documentation
+141:1:1:ZL011.missing_doc_comment:public declaration 'SyslogTlsConfig' is missing documentation
+149:1:1:ZL011.missing_doc_comment:public declaration 'SyslogSinkConfig' is missing documentation
+158:1:1:ZL011.missing_doc_comment:public declaration 'SinksConfig' is missing documentation
+163:1:1:ZL011.missing_doc_comment:public declaration 'FiltersConfig' is missing documentation
+184:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+208:1:1:ZL011.missing_doc_comment:public declaration 'loadConfig' is missing documentation
+611:50:2:ZL500.os_specific_code:Unix-specific path code '"/var/' may cause portability issues; consider adding OS detection guards
+611:132:2:ZL500.os_specific_code:Unix-specific path code '"/var/' may cause portability issues; consider adding OS detection guards
+623:40:2:ZL500.os_specific_code:Unix-specific path code '"/var/' may cause portability issues; consider adding OS detection guards
+634:50:2:ZL500.os_specific_code:Unix-specific path code '"/var/' may cause portability issues; consider adding OS detection guards
+486:50:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+587:50:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+665:50:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+695:51:2:ZL500.os_specific_code:Unix-specific path code '"/tmp/' may cause portability issues; consider adding OS detection guards
+486:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+587:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+611:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+611:132:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+623:40:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+634:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+665:50:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+695:51:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+773:48:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+442:39:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+740:39:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+752:40:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer

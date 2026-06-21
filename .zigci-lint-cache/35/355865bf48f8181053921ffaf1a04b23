@@ -1,0 +1,12 @@
+44:30:2:ZL002.no_unreachable:use of 'unreachable' may hide bugs
+73:86:3:ZL003.no_empty_catch:empty catch block suppresses errors
+82:70:2:ZL303.max_nesting:nesting depth exceeds 4 (6)
+17:1:1:ZL011.missing_doc_comment:public declaration 'Mutex' is missing documentation
+20:5:1:ZL011.missing_doc_comment:public declaration 'lock' is missing documentation
+24:5:1:ZL011.missing_doc_comment:public declaration 'unlock' is missing documentation
+28:5:1:ZL011.missing_doc_comment:public declaration 'tryLock' is missing documentation
+33:1:1:ZL011.missing_doc_comment:public declaration 'Condition' is missing documentation
+42:5:1:ZL011.missing_doc_comment:public declaration 'wait' is missing documentation
+48:5:1:ZL011.missing_doc_comment:public declaration 'timedWait' is missing documentation
+104:5:1:ZL011.missing_doc_comment:public declaration 'signal' is missing documentation
+118:5:1:ZL011.missing_doc_comment:public declaration 'broadcast' is missing documentation

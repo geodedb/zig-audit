@@ -1,0 +1,44 @@
+88:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+89:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+158:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+159:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+228:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+229:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+294:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+295:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+36:101:2:ZL300.max_line_length:line exceeds 100 characters (120)
+58:101:2:ZL300.max_line_length:line exceeds 100 characters (130)
+67:101:2:ZL300.max_line_length:line exceeds 100 characters (378)
+96:101:2:ZL300.max_line_length:line exceeds 100 characters (120)
+168:101:2:ZL300.max_line_length:line exceeds 100 characters (120)
+236:101:2:ZL300.max_line_length:line exceeds 100 characters (120)
+302:101:2:ZL300.max_line_length:line exceeds 100 characters (120)
+307:101:2:ZL300.max_line_length:line exceeds 100 characters (122)
+101:38:2:ZL108.sensitive_data_exposure:potential hardcoded secret 'password'; use environment variables or secure storage
+307:38:2:ZL108.sensitive_data_exposure:potential hardcoded secret 'private_key'; use environment variables or secure storage
+26:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+39:9:1:ZL009.var_should_be_const:variable 'mock_sender' is never reassigned; consider using 'const'
+75:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+98:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+147:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+170:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+216:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+238:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+283:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+287:9:1:ZL009.var_should_be_const:variable 'fixed_clock' is never reassigned; consider using 'const'
+288:9:1:ZL009.var_should_be_const:variable 'fixed_id_gen' is never reassigned; consider using 'const'
+297:9:1:ZL009.var_should_be_const:variable 'test_config' is never reassigned; consider using 'const'
+304:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+171:16:1:ZL010.magic_number:magic number 50; consider using a named constant
+87:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+90:34:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+157:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+164:70:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+194:35:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+195:33:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+196:33:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+227:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+230:34:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+293:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+300:70:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+333:59:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

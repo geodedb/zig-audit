@@ -1,0 +1,30 @@
+95:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+96:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+173:37:3:ZL003.no_empty_catch:empty catch block suppresses errors
+174:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+67:101:2:ZL300.max_line_length:line exceeds 100 characters (398)
+14:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+43:9:1:ZL009.var_should_be_const:variable 'mock_sender' is never reassigned; consider using 'const'
+84:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+107:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+139:9:1:ZL009.var_should_be_const:variable 'parsed' is never reassigned; consider using 'const'
+162:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+166:9:1:ZL009.var_should_be_const:variable 'fixed_clock' is never reassigned; consider using 'const'
+185:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+24:16:1:ZL010.magic_number:magic number 1234; consider using a named constant
+37:17:1:ZL010.magic_number:magic number 514; consider using a named constant
+76:44:1:ZL010.magic_number:magic number 20; consider using a named constant
+77:55:1:ZL010.magic_number:magic number 6; consider using a named constant
+80:31:1:ZL010.magic_number:magic number 166; consider using a named constant
+102:25:1:ZL010.magic_number:magic number 3; consider using a named constant
+186:16:1:ZL010.magic_number:magic number 20; consider using a named constant
+237:64:1:ZL010.magic_number:magic number 17; consider using a named constant
+238:64:1:ZL010.magic_number:magic number 20; consider using a named constant
+239:64:1:ZL010.magic_number:magic number 23; consider using a named constant
+94:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+100:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+138:44:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+172:22:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+178:29:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+210:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+215:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

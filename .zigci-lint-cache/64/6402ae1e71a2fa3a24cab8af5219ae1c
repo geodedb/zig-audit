@@ -1,0 +1,43 @@
+213:11:1:ZL203.const_snakecase:constant 'TEST_TIMESTAMP_MS' should use snake_case (or PascalCase for types)
+214:11:1:ZL203.const_snakecase:constant 'TEST_TRACE_ID' should use snake_case (or PascalCase for types)
+215:11:1:ZL203.const_snakecase:constant 'TEST_SPAN_ID' should use snake_case (or PascalCase for types)
+307:101:2:ZL300.max_line_length:line exceeds 100 characters (109)
+149:13:1:ZL009.var_should_be_const:variable 'seed_bytes' is never reassigned; consider using 'const'
+168:13:1:ZL009.var_should_be_const:variable 'bytes' is never reassigned; consider using 'const'
+175:13:1:ZL009.var_should_be_const:variable 'bytes' is never reassigned; consider using 'const'
+228:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+240:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+255:9:1:ZL009.var_should_be_const:variable 'trace_buf' is never reassigned; consider using 'const'
+259:9:1:ZL009.var_should_be_const:variable 'span_buf' is never reassigned; consider using 'const'
+265:9:1:ZL009.var_should_be_const:variable 'gen' is never reassigned; consider using 'const'
+268:9:1:ZL009.var_should_be_const:variable 'buf1' is never reassigned; consider using 'const'
+269:9:1:ZL009.var_should_be_const:variable 'buf2' is never reassigned; consider using 'const'
+278:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+285:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+292:9:1:ZL009.var_should_be_const:variable 'buf' is never reassigned; consider using 'const'
+311:9:1:ZL009.var_should_be_const:variable 'buf_shared' is never reassigned; consider using 'const'
+312:9:1:ZL009.var_should_be_const:variable 'buf_clock' is never reassigned; consider using 'const'
+316:9:1:ZL009.var_should_be_const:variable 'fixed_clock' is never reassigned; consider using 'const'
+298:59:1:ZL010.magic_number:magic number 500; consider using a named constant
+304:58:1:ZL010.magic_number:magic number 253_402_300_800_000; consider using a named constant
+307:82:1:ZL010.magic_number:magic number 253_402_300_799_999; consider using a named constant
+19:1:1:ZL011.missing_doc_comment:public declaration 'Clock' is missing documentation
+29:5:1:ZL011.missing_doc_comment:public declaration 'nowMs' is missing documentation
+33:5:1:ZL011.missing_doc_comment:public declaration 'nowRfc3339' is missing documentation
+74:1:1:ZL011.missing_doc_comment:public declaration 'SystemClock' is missing documentation
+80:5:1:ZL011.missing_doc_comment:public declaration 'clock' is missing documentation
+93:1:1:ZL011.missing_doc_comment:public declaration 'FixedClock' is missing documentation
+101:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+105:5:1:ZL011.missing_doc_comment:public declaration 'clock' is missing documentation
+120:1:1:ZL011.missing_doc_comment:public declaration 'IdGen' is missing documentation
+129:5:1:ZL011.missing_doc_comment:public declaration 'traceId' is missing documentation
+133:5:1:ZL011.missing_doc_comment:public declaration 'spanId' is missing documentation
+138:1:1:ZL011.missing_doc_comment:public declaration 'SystemIdGen' is missing documentation
+148:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+162:5:1:ZL011.missing_doc_comment:public declaration 'idGen' is missing documentation
+181:1:1:ZL011.missing_doc_comment:public declaration 'FixedIdGen' is missing documentation
+190:5:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+197:5:1:ZL011.missing_doc_comment:public declaration 'idGen' is missing documentation
+213:1:1:ZL011.missing_doc_comment:public declaration 'TEST_TIMESTAMP_MS' is missing documentation
+214:1:1:ZL011.missing_doc_comment:public declaration 'TEST_TRACE_ID' is missing documentation
+215:1:1:ZL011.missing_doc_comment:public declaration 'TEST_SPAN_ID' is missing documentation

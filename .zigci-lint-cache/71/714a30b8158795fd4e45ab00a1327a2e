@@ -1,0 +1,43 @@
+232:40:3:ZL003.no_empty_catch:empty catch block suppresses errors
+22:8:1:ZL200.fn_camelcase:function 'BoundedChannel' should use camelCase
+141:101:2:ZL300.max_line_length:line exceeds 100 characters (214)
+22:5:2:ZL301.max_function_lines:function exceeds 80 lines (118)
+232:46:2:ZL303.max_nesting:nesting depth exceeds 4 (6)
+228:17:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+240:9:1:ZL009.var_should_be_const:variable 'sum' is never reassigned; consider using 'const'
+241:9:1:ZL009.var_should_be_const:variable 'received' is never reassigned; consider using 'const'
+270:9:1:ZL009.var_should_be_const:variable 'ch' is never reassigned; consider using 'const'
+145:54:1:ZL010.magic_number:magic number 4; consider using a named constant
+150:39:1:ZL010.magic_number:magic number 3; consider using a named constant
+151:39:1:ZL010.magic_number:magic number 4; consider using a named constant
+154:40:1:ZL010.magic_number:magic number 5; consider using a named constant
+158:42:1:ZL010.magic_number:magic number 3; consider using a named constant
+159:42:1:ZL010.magic_number:magic number 4; consider using a named constant
+167:54:1:ZL010.magic_number:magic number 4; consider using a named constant
+181:54:1:ZL010.magic_number:magic number 4; consider using a named constant
+184:39:1:ZL010.magic_number:magic number 10; consider using a named constant
+185:39:1:ZL010.magic_number:magic number 20; consider using a named constant
+189:42:1:ZL010.magic_number:magic number 10; consider using a named constant
+190:42:1:ZL010.magic_number:magic number 20; consider using a named constant
+197:53:1:ZL010.magic_number:magic number 3; consider using a named constant
+201:39:1:ZL010.magic_number:magic number 10; consider using a named constant
+202:39:1:ZL010.magic_number:magic number 20; consider using a named constant
+203:41:1:ZL010.magic_number:magic number 10; consider using a named constant
+204:41:1:ZL010.magic_number:magic number 20; consider using a named constant
+207:39:1:ZL010.magic_number:magic number 30; consider using a named constant
+208:39:1:ZL010.magic_number:magic number 40; consider using a named constant
+209:39:1:ZL010.magic_number:magic number 50; consider using a named constant
+210:40:1:ZL010.magic_number:magic number 60; consider using a named constant
+212:41:1:ZL010.magic_number:magic number 30; consider using a named constant
+213:41:1:ZL010.magic_number:magic number 40; consider using a named constant
+214:41:1:ZL010.magic_number:magic number 50; consider using a named constant
+251:42:1:ZL010.magic_number:magic number 499500; consider using a named constant
+256:54:1:ZL010.magic_number:magic number 4; consider using a named constant
+273:40:1:ZL010.magic_number:magic number 42; consider using a named constant
+274:40:1:ZL010.magic_number:magic number 99; consider using a named constant
+276:43:1:ZL010.magic_number:magic number 42; consider using a named constant
+44:9:1:ZL011.missing_doc_comment:public declaration 'init' is missing documentation
+57:9:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+125:9:1:ZL011.missing_doc_comment:public declaration 'isClosed' is missing documentation
+46:37:1:ZL603.missing_defer_cleanup:resource '.alloc(' may not be properly cleaned up; consider using defer
+226:26:1:ZL603.missing_defer_cleanup:resource 'std.Thread.spawn(' may not be properly cleaned up; consider using defer

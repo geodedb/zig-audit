@@ -1,0 +1,30 @@
+80:11:1:ZL203.const_snakecase:constant 'filterAndRedactMetadata' should use snake_case (or PascalCase for types)
+83:11:1:ZL203.const_snakecase:constant 'formatCef' should use snake_case (or PascalCase for types)
+100:17:2:ZL204.no_dupe_import:duplicate import of 'std' (first at line 90)
+41:101:2:ZL300.max_line_length:line exceeds 100 characters (171)
+71:101:2:ZL300.max_line_length:line exceeds 100 characters (171)
+86:101:2:ZL300.max_line_length:line exceeds 100 characters (205)
+43:1:1:ZL011.missing_doc_comment:public declaration 'events' is missing documentation
+44:1:1:ZL011.missing_doc_comment:public declaration 'filters' is missing documentation
+45:1:1:ZL011.missing_doc_comment:public declaration 'config' is missing documentation
+46:1:1:ZL011.missing_doc_comment:public declaration 'syslog' is missing documentation
+47:1:1:ZL011.missing_doc_comment:public declaration 'file_sink' is missing documentation
+48:1:1:ZL011.missing_doc_comment:public declaration 'time' is missing documentation
+49:1:1:ZL011.missing_doc_comment:public declaration 'cef' is missing documentation
+50:1:1:ZL011.missing_doc_comment:public declaration 'json_util' is missing documentation
+51:1:1:ZL011.missing_doc_comment:public declaration 'logger' is missing documentation
+52:1:1:ZL011.missing_doc_comment:public declaration 'channel' is missing documentation
+59:1:1:ZL011.missing_doc_comment:public declaration 'observability' is missing documentation
+66:1:1:ZL011.missing_doc_comment:public declaration 'observability_init' is missing documentation
+73:1:1:ZL011.missing_doc_comment:public declaration 'AuditEvent' is missing documentation
+74:1:1:ZL011.missing_doc_comment:public declaration 'SendStatus' is missing documentation
+75:1:1:ZL011.missing_doc_comment:public declaration 'AuditLogger' is missing documentation
+76:1:1:ZL011.missing_doc_comment:public declaration 'Config' is missing documentation
+77:1:1:ZL011.missing_doc_comment:public declaration 'FileSink' is missing documentation
+78:1:1:ZL011.missing_doc_comment:public declaration 'SyslogSender' is missing documentation
+79:1:1:ZL011.missing_doc_comment:public declaration 'RedactionToken' is missing documentation
+80:1:1:ZL011.missing_doc_comment:public declaration 'filterAndRedactMetadata' is missing documentation
+81:1:1:ZL011.missing_doc_comment:public declaration 'Clock' is missing documentation
+82:1:1:ZL011.missing_doc_comment:public declaration 'IdGen' is missing documentation
+83:1:1:ZL011.missing_doc_comment:public declaration 'formatCef' is missing documentation
+84:1:1:ZL011.missing_doc_comment:public declaration 'BoundedChannel' is missing documentation

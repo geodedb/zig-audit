@@ -1,0 +1,62 @@
+45:101:2:ZL300.max_line_length:line exceeds 100 characters (108)
+51:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+288:101:2:ZL300.max_line_length:line exceeds 100 characters (105)
+317:101:2:ZL300.max_line_length:line exceeds 100 characters (142)
+379:101:2:ZL300.max_line_length:line exceeds 100 characters (104)
+291:43:2:ZL108.sensitive_data_exposure:potential hardcoded secret 'password'; use environment variables or secure storage
+13:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+66:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+79:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+115:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+153:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+164:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+195:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+247:9:1:ZL009.var_should_be_const:variable 'pipe_count' is never reassigned; consider using 'const'
+248:9:1:ZL009.var_should_be_const:variable 'i' is never reassigned; consider using 'const'
+251:17:1:ZL009.var_should_be_const:variable 'bs_count' is never reassigned; consider using 'const'
+252:17:1:ZL009.var_should_be_const:variable 'j' is never reassigned; consider using 'const'
+275:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+332:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+360:9:1:ZL009.var_should_be_const:variable 'gpa' is never reassigned; consider using 'const'
+364:9:1:ZL009.var_should_be_const:variable 'fixed_clock' is never reassigned; consider using 'const'
+377:9:1:ZL009.var_should_be_const:variable 'metadata_obj' is never reassigned; consider using 'const'
+381:9:1:ZL009.var_should_be_const:variable 'event' is never reassigned; consider using 'const'
+60:64:1:ZL010.magic_number:magic number 5; consider using a named constant
+62:65:1:ZL010.magic_number:magic number 10; consider using a named constant
+85:79:1:ZL010.magic_number:magic number 42; consider using a named constant
+259:35:1:ZL010.magic_number:magic number 7; consider using a named constant
+264:40:1:ZL010.magic_number:magic number 7; consider using a named constant
+327:47:1:ZL010.magic_number:magic number 0x7F; consider using a named constant
+125:20:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+149:56:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+171:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+176:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+181:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+184:51:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+186:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+204:19:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+212:19:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+218:23:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+219:23:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+232:45:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+232:68:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+233:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+236:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+239:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+242:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+337:52:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+340:49:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+341:49:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+342:49:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+343:49:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+346:51:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+348:36:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+351:52:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+354:49:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+355:49:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+356:49:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+379:71:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+401:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+402:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+403:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+404:53:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path

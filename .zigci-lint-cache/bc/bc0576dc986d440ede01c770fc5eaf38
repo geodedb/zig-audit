@@ -1,0 +1,27 @@
+74:15:1:ZL203.const_snakecase:constant 'MAX_FIELD_LEN' should use snake_case (or PascalCase for types)
+288:101:2:ZL300.max_line_length:line exceeds 100 characters (113)
+183:13:1:ZL009.var_should_be_const:variable 'cloned' is never reassigned; consider using 'const'
+260:9:1:ZL009.var_should_be_const:variable 'long_field' is never reassigned; consider using 'const'
+268:9:1:ZL009.var_should_be_const:variable 'long_field' is never reassigned; consider using 'const'
+276:9:1:ZL009.var_should_be_const:variable 'max_field' is never reassigned; consider using 'const'
+303:13:1:ZL009.var_should_be_const:variable 'event' is never reassigned; consider using 'const'
+26:23:1:ZL010.magic_number:magic number 7; consider using a named constant
+27:22:1:ZL010.magic_number:magic number 6; consider using a named constant
+28:22:1:ZL010.magic_number:magic number 4; consider using a named constant
+29:23:1:ZL010.magic_number:magic number 3; consider using a named constant
+36:22:1:ZL010.magic_number:magic number 5; consider using a named constant
+38:23:1:ZL010.magic_number:magic number 10; consider using a named constant
+130:34:1:ZL010.magic_number:magic number 0x7F; consider using a named constant
+18:1:1:ZL011.missing_doc_comment:public declaration 'Severity' is missing documentation
+24:5:1:ZL011.missing_doc_comment:public declaration 'toSyslogSeverity' is missing documentation
+33:5:1:ZL011.missing_doc_comment:public declaration 'toCefSeverity' is missing documentation
+43:1:1:ZL011.missing_doc_comment:public declaration 'Outcome' is missing documentation
+49:5:1:ZL011.missing_doc_comment:public declaration 'toString' is missing documentation
+59:1:1:ZL011.missing_doc_comment:public declaration 'AuditEvent' is missing documentation
+74:5:1:ZL011.missing_doc_comment:public declaration 'MAX_FIELD_LEN' is missing documentation
+76:5:1:ZL011.missing_doc_comment:public declaration 'ValidateError' is missing documentation
+134:5:1:ZL011.missing_doc_comment:public declaration 'deinit' is missing documentation
+182:5:1:ZL011.missing_doc_comment:public declaration 'clone' is missing documentation
+203:5:1:ZL011.missing_doc_comment:public declaration 'freeCloned' is missing documentation
+288:6:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
+299:42:1:ZL501.hardcoded_path_separator:hardcoded path may not work across operating systems; consider using std.fs.path
