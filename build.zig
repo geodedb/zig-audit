@@ -27,6 +27,7 @@ pub fn build(b: *std.Build) void {
     // GAP-074/QR-017: single-source the library version from build.zig.zon
     // so `audit.version` can never drift from the package version.
     build_options.addOption([]const u8, "package_version", @import("build.zig.zon").version);
+    build_options.addOption([]const u8, "package_name", "audit");
     const build_options_mod = build_options.createModule();
 
     // Observability seam (otel). Declared as a SHARED NAMED MODULE so
