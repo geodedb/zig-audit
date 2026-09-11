@@ -13,7 +13,7 @@ repos:
   # Standard pre-commit hooks (best practices)
   # =============================================================================
 - repo: https://github.com/pre-commit/pre-commit-hooks
-  rev: 3e8a8703264a2f4a69428a0aa4dcb512790b2c8c  # v6.0.0
+  rev: v6.0.0  # v6.0.0
   hooks:
       # Formatting
   - id: trailing-whitespace
@@ -80,7 +80,7 @@ repos:
   # Markdown linting
   # =============================================================================
 - repo: https://github.com/igorshubovych/markdownlint-cli
-  rev: 0d9fcb51a54f3b750b911c054b4bd1a590f1b592  # v0.43.0
+  rev: v0.49.1  # v0.43.0
   hooks:
   - id: markdownlint
     args: [--fix, --disable, MD013, MD033, MD041, MD024, MD060, MD036, MD051, MD052, MD055, --]
