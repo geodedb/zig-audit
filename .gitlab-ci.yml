@@ -111,7 +111,14 @@ stages:
 
 # Override zig-format component to use the project's ZIG_VERSION.
 # The v1.2.1 component defaults to 0.14.0 and does not accept a version input.
+# SONNY-2394: the component also sets ZIG_VERSION as a job-level variable,
+# which takes precedence over the global ZIG_VERSION above, so overriding
+# cache/before_script alone still left the job downloading Zig 0.14.0 and
+# verifying it against the 0.16.0 SHA-256 pins -- always failing the
+# checksum check. Override the job-level variable too.
 zig-format:
+  variables:
+    ZIG_VERSION: "0.16.0"
   cache: *zig-cache
   before_script:
     - *install-zig
