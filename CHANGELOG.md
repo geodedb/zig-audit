@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.20] - 2026-09-24
+
+### Fixed
+
+- Detect and mask dot-separated phone numbers (`555.123.4567`,
+  `+1.555.123.4567`, `01.23.45.67.89`) as PII; IPv4-shaped values (four groups
+  of at most three digits) are still not phones (SONNY-2394).
+
+### Changed
+
+- Versions 0.1.15 through 0.1.19 were dependency-convergence releases cut on
+  the diamond-sync line (GAP-0838 grpc_zig convergence); 0.1.20 carries the
+  same dependency set from `main`.
+
 ## [0.1.14] - 2026-09-12
 
 ### Changed

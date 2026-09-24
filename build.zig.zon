@@ -1,6 +1,6 @@
 .{
     .name = .audit,
-    .version = "0.1.14",
+    .version = "0.1.20",
     .fingerprint = 0x9218ff7908edd427,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
