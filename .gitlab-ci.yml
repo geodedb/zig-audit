@@ -118,6 +118,9 @@ zig-format:
 
 # GAP-071: lint gate for the Python tooling under scripts/.
 # ruff version pinned to match .pre-commit-config.yaml (ruff-pre-commit v0.14.14).
+# SONNY-2394: this repo has no scripts/ directory yet, so gate the job on
+# Python sources actually existing (see devnw/codepros/geode/geode-argo-arda
+# for the same exists: convention) instead of failing every pipeline.
 python-lint:
   stage: lint
   image: python:3.14-slim
@@ -126,6 +129,8 @@ python-lint:
   script:
     - ruff check scripts/
     - ruff format --check scripts/
+  rules:
+    - exists: ["scripts/**/*.py"]
 
 # Build job
 build:
