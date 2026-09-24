@@ -124,6 +124,28 @@ test "phone number detection" {
     try testing.expect(!filters.isPhone("abcdefghij"));
 }
 
+// SONNY-2394 (geode): dot-separated phone numbers were never detected, so they
+// reached audit records unmasked under pii_mode = .mask.
+test "dotted phone number detection" {
+    try testing.expect(filters.isPhone("555.123.4567")); // NANP
+    try testing.expect(filters.isPhone("123.456.7890.1234")); // with extension
+    try testing.expect(filters.isPhone("+1.555.123.4567")); // country code
+    try testing.expect(filters.isPhone("01.23.45.67.89")); // 5 x 2-digit groups
+    // Dotted non-phones must NOT be misclassified.
+    try testing.expect(!filters.isPhone("192.168.100.100")); // IPv4, 12 digits
+    try testing.expect(!filters.isPhone("10.0.0.1"));
+    try testing.expect(!filters.isPhone("12345.67890")); // decimal, 10 digits
+    try testing.expect(!filters.isPhone("1695500000.123")); // epoch.millis
+    try testing.expect(!filters.isPhone("555..123.4567")); // empty group
+    try testing.expect(!filters.isPhone("555.123.4567."));
+}
+
+test "dotted phone number is masked" {
+    const masked = try filters.maskPhone(testing.allocator, "555.123.4567");
+    defer testing.allocator.free(masked);
+    try testing.expectEqualStrings("555***4567", masked);
+}
+
 test "PEM private key detection" {
     const pem_key = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC8Q7HgL...\n-----END PRIVATE KEY-----";
     try testing.expect(filters.isPemPrivateKey(pem_key));

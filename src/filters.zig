@@ -207,14 +207,43 @@ pub fn isEmail(value: []const u8) bool {
 /// Exposed for testing (tests/test_filters.zig).
 pub fn isPhone(value: []const u8) bool {
     var digit_count: usize = 0;
+    var has_dot = false;
     for (value) |c| {
         if (c >= '0' and c <= '9') {
             digit_count += 1;
+        } else if (c == '.') {
+            has_dot = true;
         } else if (c != ' ' and c != '-' and c != '(' and c != ')' and c != '+') {
             return false;
         }
     }
-    return digit_count >= 10 and digit_count <= 15;
+    if (digit_count < 10 or digit_count > 15) return false;
+    return !has_dot or isDottedPhone(value);
+}
+
+/// Dot-separated phone numbers ("555.123.4567", "+1.555.123.4567",
+/// "01.23.45.67.89") used to be rejected outright, so they reached audit
+/// records unmasked (SONNY-2394). Dots also separate IPv4 addresses and
+/// decimals, so a dotted value only counts as a phone in a strict dotted
+/// grouping: an optional leading '+', then all-digit groups joined by single
+/// dots (no other separator), at least 3 groups, and not IPv4-shaped
+/// (exactly 4 groups of at most 3 digits).
+fn isDottedPhone(value: []const u8) bool {
+    const rest = if (value.len > 0 and value[0] == '+') value[1..] else value;
+    var groups: usize = 0;
+    var longest: usize = 0;
+    var it = std.mem.splitScalar(u8, rest, '.');
+    while (it.next()) |group| {
+        if (group.len == 0) return false;
+        for (group) |c| {
+            if (c < '0' or c > '9') return false;
+        }
+        groups += 1;
+        longest = @max(longest, group.len);
+    }
+    if (groups < 3) return false;
+    if (groups == 4 and longest <= 3) return false; // IPv4-shaped
+    return true;
 }
 
 /// Exposed for testing (tests/test_filters.zig).
