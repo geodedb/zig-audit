@@ -5,6 +5,9 @@
 default:
   tags:
     - company
+    # The group's Windows runner also carries the `company` tag and was
+    # picking up Linux shell jobs; require a Linux runner.
+    - linux
 
 # GAP-064: components pinned to full commit SHAs (immutable) instead of
 # mutable tags. The tag each SHA corresponds to is kept as a comment.
