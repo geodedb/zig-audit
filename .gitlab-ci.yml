@@ -8,25 +8,24 @@ default:
 
 # GAP-064: components pinned to full commit SHAs (immutable) instead of
 # mutable tags. The tag each SHA corresponds to is kept as a comment.
-#   41983cfbddfe06a5e6e3c126a7f16404d36c7ef9 = v1.7.1
-#   d421e26e2e02e8449b295e1f2f047ec58128f1a5 = v1.2.1
+#   3122045afd7832332b342ca72065e4db7dde5ed4 = v1.55.8
 include:
   # Security scanning
-  - component: gitlab.com/devnw/ci-catalog/security-sast@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-secrets@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/security-sast@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/security-dependency-scanning@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/security-secrets@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/security-gitleaks@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
 
   # Code quality
-  - component: gitlab.com/devnw/ci-catalog/zig-format@d421e26e2e02e8449b295e1f2f047ec58128f1a5  # v1.2.1
+  - component: gitlab.com/devnw/ci-catalog/zig-format@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
 
   # SBOM
-  - component: gitlab.com/devnw/ci-catalog/sbom-generate@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/sbom-scan@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
+  - component: gitlab.com/devnw/ci-catalog/sbom-generate@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/sbom-scan@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
 
   # Release
-  - component: gitlab.com/devnw/ci-catalog/release-semantic@41983cfbddfe06a5e6e3c126a7f16404d36c7ef9  # v1.7.1
-  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.54.0
+  - component: gitlab.com/devnw/ci-catalog/release-semantic@3122045afd7832332b342ca72065e4db7dde5ed4  # v1.55.8
+  - component: gitlab.com/devnw/ci-catalog/zig-version-tag-check@v1.55.8
 
 variables:
   ZIG_VERSION: "0.16.0"
