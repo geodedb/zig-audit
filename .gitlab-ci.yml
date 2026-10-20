@@ -9,7 +9,8 @@ default:
     # The group's Windows runner also carries the `company` tag and was
     # picking up Linux shell jobs; require a Linux runner.
     - linux
-    - x86
+    # Inherited GitLab SAST images are AMD64-only; avoid ARM fleet runners.
+    - amd64
 
 # GAP-064: components pinned to full commit SHAs (immutable) instead of
 # mutable tags. The tag each SHA corresponds to is kept as a comment.
