@@ -56,3 +56,7 @@ zig-pkg/
 
 # Keep the hook environment regression test in the source tree.
 !/scripts/test_hook_env.py
+
+# Project-local CI toolchain/package caches
+.zig-global-cache/
+zig-0.16.0/
