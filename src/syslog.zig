@@ -19,7 +19,9 @@ const dns = @import("dns");
 
 const QUEUE_SIZE = 10000;
 
-const linux = std.os.linux;
+// Select libc on Darwin and the native POSIX implementation on Linux.
+// Raw Linux syscalls compile for Darwin but terminate with SIGSYS at runtime.
+const system = std.posix.system;
 
 /// Small IPv4 address representation — replaces the removed `std.net.Address`
 /// for the UDP/TCP socket code below. `bytes` are in network byte order but
@@ -32,10 +34,10 @@ pub const Ip4Addr = struct {
         return a.port == b.port and std.mem.eql(u8, &a.bytes, &b.bytes);
     }
 
-    /// Produce a Linux `sockaddr.in` struct ready to hand to sendto/connect.
-    pub fn toSockaddrIn(self: Ip4Addr) linux.sockaddr.in {
+    /// Produce the target platform's `sockaddr.in` struct ready to hand to sendto/connect.
+    pub fn toSockaddrIn(self: Ip4Addr) system.sockaddr.in {
         return .{
-            .family = linux.AF.INET,
+            .family = system.AF.INET,
             .port = std.mem.nativeToBig(u16, self.port),
             .addr = @bitCast(self.bytes),
         };
@@ -104,7 +106,7 @@ pub const SyslogSender = struct {
     thread: ?std.Thread,
     dropped_count: std.atomic.Value(u64),
 
-    // Persistent socket fields (GAP-021 / PERF-010) — raw Linux fd
+    // Persistent socket fields (GAP-021 / PERF-010) — native POSIX fd
     udp_socket: ?i32 = null,
     tcp_socket: ?i32 = null,
 
@@ -168,11 +170,11 @@ pub const SyslogSender = struct {
 
         // Close persistent sockets
         if (self.udp_socket) |sock| {
-            _ = linux.close(sock);
+            _ = system.close(sock);
             self.udp_socket = null;
         }
         if (self.tcp_socket) |sock| {
-            _ = linux.close(sock);
+            _ = system.close(sock);
             self.tcp_socket = null;
         }
 
@@ -262,7 +264,7 @@ pub const SyslogSender = struct {
         return addr;
     }
 
-    fn checkErrno(rc: usize) !void {
+    fn checkErrno(rc: anytype) !void {
         const err = std.posix.errno(rc);
         if (err != .SUCCESS) {
             log.debug("syslog syscall errno: {s}", .{@tagName(err)});
@@ -271,7 +273,7 @@ pub const SyslogSender = struct {
     }
 
     fn rawSocket(domain: u32, socket_type: u32, protocol: u32) !i32 {
-        const rc = linux.socket(domain, socket_type, protocol);
+        const rc = system.socket(domain, socket_type, protocol);
         try checkErrno(rc);
         return @intCast(rc);
     }
@@ -279,19 +281,19 @@ pub const SyslogSender = struct {
     fn sendUdp(self: *SyslogSender, message: []const u8) !void {
         // Create socket on first use, reuse thereafter
         if (self.udp_socket == null) {
-            self.udp_socket = try rawSocket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+            self.udp_socket = try rawSocket(system.AF.INET, system.SOCK.DGRAM, 0);
         }
         const socket = self.udp_socket.?;
 
         const addr = try self.resolveOrCached();
         const sa = addr.toSockaddrIn();
-        const rc = linux.sendto(
+        const rc = system.sendto(
             socket,
             message.ptr,
             message.len,
             0,
             @ptrCast(&sa),
-            @sizeOf(linux.sockaddr.in),
+            @sizeOf(system.sockaddr.in),
         );
         try checkErrno(rc);
     }
@@ -299,26 +301,26 @@ pub const SyslogSender = struct {
     fn sendTcp(self: *SyslogSender, message: []const u8) !void {
         // Create and connect socket on first use, reuse thereafter
         if (self.tcp_socket == null) {
-            const socket = try rawSocket(linux.AF.INET, linux.SOCK.STREAM, 0);
-            errdefer _ = linux.close(socket);
+            const socket = try rawSocket(system.AF.INET, system.SOCK.STREAM, 0);
+            errdefer _ = system.close(socket);
 
             // Set a 5-second send timeout to avoid blocking indefinitely on
             // unresponsive peers.
-            const timeout = linux.timeval{ .sec = 5, .usec = 0 };
-            _ = linux.setsockopt(
+            const timeout = system.timeval{ .sec = 5, .usec = 0 };
+            _ = system.setsockopt(
                 socket,
-                linux.SOL.SOCKET,
-                linux.SO.SNDTIMEO,
+                system.SOL.SOCKET,
+                system.SO.SNDTIMEO,
                 @ptrCast(&timeout),
-                @sizeOf(linux.timeval),
+                @sizeOf(system.timeval),
             );
 
             const addr = try self.resolveOrCached();
             const sa = addr.toSockaddrIn();
-            const rc = linux.connect(
+            const rc = system.connect(
                 socket,
                 @ptrCast(&sa),
-                @sizeOf(linux.sockaddr.in),
+                @sizeOf(system.sockaddr.in),
             );
             try checkErrno(rc);
 
@@ -331,16 +333,16 @@ pub const SyslogSender = struct {
         var prefix_buf: [24]u8 = undefined;
         const length_prefix = std.fmt.bufPrint(&prefix_buf, "{d} ", .{message.len}) catch unreachable;
 
-        // Use sendto with NULL addr as a raw "send" equivalent on Linux.
-        const rc1 = linux.sendto(socket, length_prefix.ptr, length_prefix.len, 0, null, 0);
+        // Use sendto with NULL addr as a connected-stream send on POSIX platforms.
+        const rc1 = system.sendto(socket, length_prefix.ptr, length_prefix.len, 0, null, 0);
         checkErrno(rc1) catch |err| {
-            _ = linux.close(socket);
+            _ = system.close(socket);
             self.tcp_socket = null;
             return err;
         };
-        const rc2 = linux.sendto(socket, message.ptr, message.len, 0, null, 0);
+        const rc2 = system.sendto(socket, message.ptr, message.len, 0, null, 0);
         checkErrno(rc2) catch |err| {
-            _ = linux.close(socket);
+            _ = system.close(socket);
             self.tcp_socket = null;
             return err;
         };
@@ -635,12 +637,53 @@ test "SyslogSender deinit closes persistent sockets safely" {
     const sender = try SyslogSender.init(allocator, syslog_config, service_config, identity_config, clock);
 
     // Manually create a UDP socket to verify deinit closes it
-    const rc = linux.socket(linux.AF.INET, linux.SOCK.DGRAM, 0);
+    const rc = system.socket(system.AF.INET, system.SOCK.DGRAM, 0);
     try std.testing.expect(std.posix.errno(rc) == .SUCCESS);
     sender.udp_socket = @intCast(rc);
 
-    // deinit should close it without error
+    // Verify ownership is released, not just that destruction does not crash.
+    const fd = sender.udp_socket.?;
     sender.deinit();
+    try std.testing.expectEqual(std.posix.E.BADF, std.posix.errno(system.fcntl(fd, system.F.GETFD, @as(usize, 0))));
+}
+
+test "SyslogSender sends UDP over loopback and reuses its socket" {
+    const receiver = try SyslogSender.rawSocket(system.AF.INET, system.SOCK.DGRAM, 0);
+    defer _ = system.close(receiver);
+    const timeout = system.timeval{ .sec = 2, .usec = 0 };
+    try SyslogSender.checkErrno(system.setsockopt(receiver, system.SOL.SOCKET, system.SO.RCVTIMEO, @ptrCast(&timeout), @sizeOf(system.timeval)));
+    var address = (Ip4Addr{ .bytes = .{ 127, 0, 0, 1 }, .port = 0 }).toSockaddrIn();
+    try SyslogSender.checkErrno(system.bind(receiver, @ptrCast(&address), @sizeOf(system.sockaddr.in)));
+    var address_len: system.socklen_t = @sizeOf(system.sockaddr.in);
+    try SyslogSender.checkErrno(system.getsockname(receiver, @ptrCast(&address), &address_len));
+
+    var fixed_clock = time.FixedClock.init(1735689600000);
+    const sender = try SyslogSender.init(std.testing.allocator, .{
+        .enabled = false,
+        .protocol = .udp,
+        .host = "127.0.0.1",
+        .port = std.mem.bigToNative(u16, address.port),
+        .rfc5424 = .{ .facility = .local0 },
+    }, .{ .name = "test", .host = "test-host", .pid = 1 }, .{
+        .vendor = "V",
+        .product = "P",
+        .version = "1",
+    }, fixed_clock.clock());
+    defer sender.deinit();
+
+    var first_socket: ?i32 = null;
+    for ([_][]const u8{ "first audit event", "second audit event" }) |message| {
+        try sender.sendUdp(message);
+        if (first_socket) |fd| {
+            try std.testing.expectEqual(fd, sender.udp_socket.?);
+        } else {
+            first_socket = sender.udp_socket;
+        }
+        var buffer: [128]u8 = undefined;
+        const received = system.recvfrom(receiver, &buffer, buffer.len, 0, null, null);
+        try SyslogSender.checkErrno(received);
+        try std.testing.expectEqualStrings(message, buffer[0..@intCast(received)]);
+    }
 }
 
 test "SyslogSender resolveOrCached caches address" {
