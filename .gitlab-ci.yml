@@ -19,6 +19,7 @@ include:
   # Run the complete suite on macOS to validate portable DNS entropy.
   - component: gitlab.com/devnw/ci-catalog/zig-test-macos@402e8986ef2d220db1c2591a461ba60850c59e5b
     inputs:
+      tags: [dedicated, macos, arm]
       zig_version: "0.16.0"
       job_suffix: "-portable-deps"
       test_step: test-all
@@ -347,7 +348,6 @@ workflow:
     - when: always
 
 zig-test-macos-portable-deps-0.16.0:
-  image: macos-26-xcode-26
   needs: []
   variables:
     ZIG_GLOBAL_CACHE_DIR: "$CI_PROJECT_DIR/.zig-global-cache"
