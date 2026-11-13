@@ -1,12 +1,12 @@
 .{
     .name = .audit,
-    .version = "0.1.23",
+    .version = "0.1.24",
     .fingerprint = 0x9218ff7908edd427,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .dns = .{
-            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=5b71169ae2763020482a7672b7f0b16d3b577f75#5b71169ae2763020482a7672b7f0b16d3b577f75",
-            .hash = "dns-0.1.27-x4U-zfVqGACo8cYBKhXmcD9V8CTwM-E7064GPc7L6Du_",
+            .url = "git+https://gitlab.com/devnw/zig/dns.git?ref=v0.1.28#3c0a5602afd42aef6e5543dccb5b0dc8a92cabf5",
+            .hash = "dns-0.1.28-x4U-zSWCGAA2rnMI5f5kDd8OoAIp2LoOXz_gJKOg3XgQ",
         },
         // Lazy: the package is only fetched when `-Dwith_otel=true` —
         // `b.lazyDependency("otel", ...)` short-circuits the resolution
