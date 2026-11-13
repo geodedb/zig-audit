@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.24] - 2026-11-12
+
+### Fixed
+
+- Syslog sink uses native POSIX sockets on macOS (first tagged release to
+  carry the fix that landed on `main` after 0.1.23).
+
+### Changed
+
+- Update dns to v0.1.28, whose `Address.eql` no longer reaches `unreachable`
+  (SONNY-6447).
+- Versions 0.1.21 through 0.1.23 were dependency-convergence releases
+  (SONNY-4829) with no audit source changes.
+
 ## [0.1.20] - 2026-09-24
 
 ### Fixed
