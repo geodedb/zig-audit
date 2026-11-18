@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.25] - 2026-11-17
+
+### Changed
+
+- dns v0.1.28 -> v0.1.29 and otel v0.1.28 -> v0.1.30 (grpc-zig v0.1.16), so audit and its consumers (geode) resolve a single dns, config, otel and thread-pool (SONNY-6630).
+
 ## [0.1.24] - 2026-11-12
 
 ### Fixed
